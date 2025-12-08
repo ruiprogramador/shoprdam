@@ -13,59 +13,59 @@ This project follows the structure and development workflow taught in the Udemy 
 🎯 Key Features
 🛒 Frontend
 
-Product catalog & categories
+-> Product catalog & categories
 
-Product details page
+-> Product details page
 
-Cart & checkout flow
+-> Cart & checkout flow
 
-Customer authentication
+-> Customer authentication
 
-Order history
+-> Order history
 
 🏪 Vendor Features
 
-Vendor registration & approval
+-> Vendor registration & approval
 
-Vendor dashboard
+-> Vendor dashboard
 
-Product CRUD
+-> Product CRUD
 
-Order management
+-> Order management
 
-Earnings overview
+-> Earnings overview
 
 ⚙️ Admin Panel (powered by Tabler UI)
 
-Manage vendors & customers
+-> Manage vendors & customers
 
-Approve/ban vendors
+-> Approve/ban vendors
 
-Global product management
+-> Global product management
 
-Category & attribute management
+-> Category & attribute management
 
 System settings
 
 🔐 Authentication & Security
 
-Laravel Breeze
+-> Laravel Breeze
 
-Role-based permissions (Admin, Vendor, Customer)
+-> Role-based permissions (Admin, Vendor, Customer)
 
-CSRF & input validation
+-> CSRF & input validation
 
-Secure file uploads
+-> Secure file uploads
 
 💰 Business Logic
 
-Multi-vendor commissions
+-> Multi-vendor commissions
 
-Order payment workflow
+-> Order payment workflow
 
-Vendor earnings reports
+-> Vendor earnings reports
 
-Product stock system
+-> Product stock system
 
 🧩 Tech Stack
 Framework	      :   Laravel 12 (PHP 8.3+)
@@ -76,17 +76,29 @@ Package         :  Composer, NPM
 Deployment	    :  Laravel Herd
 📁 Project Structure
 shoprdam/
+
 │── app/
+
 │── bootstrap/
+
 │── config/
+
 │── database/
+
 │── public/
+
 │── resources/
+
 │   ├── views/
+
 │   ├── js/
+
 │   └── css/
+
 │── routes/
+
 │── storage/
+
 └── tests/
 
 🛠️ Installation & Setup
