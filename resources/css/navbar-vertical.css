@@ -27,3 +27,21 @@
   background: transparent;
   opacity: .85;
 }
+
+[data-bs-theme="dark"] .navbar-vertical .dropdown-item:hover {
+  background: transparent;
+  opacity: .85;
+}
+
+[data-bs-theme="dark"] .navbar-vertical .dropdown-item.active {
+  font-weight: 600;
+  color: #fff;
+}
+
+[data-bs-theme="dark"] .logo-img {
+  filter: brightness(0) invert(1);
+}
+
+.navbar-vertical .nav-link {
+  color: #adb5bd !important;
+}
