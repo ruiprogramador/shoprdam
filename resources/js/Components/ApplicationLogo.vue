@@ -2,7 +2,7 @@
     <img
         :src="logo"
         alt="Application Logo"
-        class="h-12 w-auto"
+        class="h-12 w-auto logo-img"
     >
 </template>
 

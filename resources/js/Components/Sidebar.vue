@@ -26,7 +26,7 @@ const props = defineProps({
         <div class="container-fluid">
 
             <!-- Logo -->
-            <div class="navbar-brand navbar-brand-autodark">
+            <div class="navbar-brand">
                 <ApplicationLogo
                     class="block h-9 w-auto fill-current text-zinc-50"
                 />
