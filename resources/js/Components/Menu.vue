@@ -36,7 +36,6 @@ const toggleManagement = () => {
                     <a
                         href="#"
                         class="nav-link dropdown-toggle"
-                        style="cursor: pointer; padding: 0px;"
                         @click.prevent="toggleManagement"
                     >
                         <span class="nav-link-title">
@@ -47,18 +46,18 @@ const toggleManagement = () => {
 
                     <!-- DROPDOWN CONTENT -->
                     <div class="dropdown-menu" :class="{ show: openManagement }">
-                        <NavLink href="#" class="dropdown-item" style="cursor: pointer; padding-left: 20px !important;">
+                        <NavLink href="#" class="dropdown-item">
                             <i class="fas fa-user-circle ms-1"></i>
                             Users
                         </NavLink>
 
-                        <NavLink href="#" class="dropdown-item" style="cursor: pointer; padding-left: 20px !important;">
+                        <NavLink href="#" class="dropdown-item">
                             <i class="fas fa-cog ms-1"></i>
                             Settings
 
                         </NavLink>
 
-                        <NavLink href="#" class="dropdown-item" style="cursor: pointer; padding-left: 20px !important;">
+                        <NavLink href="#" class="dropdown-item">
                             <i class="fas fa-lock ms-1"></i>
                             Roles
                         </NavLink>
