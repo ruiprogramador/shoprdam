@@ -5,10 +5,12 @@
 import ApplicationLogo from '@/Components/ApplicationLogo.vue';
 
 const props = defineProps({
-  open: Boolean,
+    open: Boolean,
+    theme: String,
+    isMobile: Boolean
 });
 
-
+const emit = defineEmits(['close'])
 
 </script>
 
@@ -19,7 +21,7 @@ const props = defineProps({
         data-bs-theme="dark"
     > -->
     <aside
-        class="navbar navbar-vertical navbar-expand-lg navbar-collapse"
+        class="navbar navbar-vertical navbar-expand navbar-collapse sidebar"
         :class="{ 'navbar-collapsed': !props.open }"
         v-if="props.open"
     >
@@ -30,12 +32,21 @@ const props = defineProps({
                 <ApplicationLogo
                     class="block h-9 w-auto fill-current text-zinc-50"
                 />
+                <!-- Close button (mobile only) -->
+                <button
+                    v-if="isMobile"
+                    class="btn btn-icon mobile-close-btn"
+                    aria-label="Close sidebar"
+                    @click="emit('close')"
+                >
+                    <i class="fas fa-times"></i>
+                </button>
             </div>
 
-            <!-- Menu -->
-            <div id="sidebar-menu">
+            <!-- Vertical Menu -->
+            <div id="sidebar-vertical-menu">
                 <div class="navbar-nav flex-column">
-                    <slot name="menu" />
+                    <slot name="vertical_menu" />
                 </div>
             </div>
         </div>

@@ -1,3 +1,11 @@
+.mobile-close-btn {
+  @apply
+    absolute
+    right-0
+    /* mr-4 */
+    !important;
+}
+
 /* =========================
    NAV LINKS (TOP LEVEL)
 ========================= */
@@ -40,8 +48,12 @@
   color: #adb5bd;
 }
 
+
+        /* =========================
+        DROPDOWN TOGGLE
+        ========================= */
 .navbar-vertical .dropdown-toggle {
-  @apply cursor-pointer pl-0 text-gray-600 !important;
+  @apply cursor-pointer pl-0 text-gray-600 justify-start !important;
 }
 
 [data-bs-theme="dark"] .navbar-vertical .dropdown-toggle {
@@ -50,24 +62,33 @@
 }
 
 
-/* =========================
-   DROPDOWN MENU CONTAINER
-========================= */
+        /* =========================
+        DROPDOWN MENU CONTAINER
+        ========================= */
 
 .navbar-vertical .dropdown-menu {
-  position: relative;
-  width: 100%;
-  background: transparent;
-  border: 0;
-  box-shadow: none;
-  padding-left: 1.5rem;
-  margin-top: 0.25rem;
+    /*   position: relative;
+    width: 100%;
+    background: transparent;
+    border: 0;
+    box-shadow: none;
+    padding-left: 1.5rem;
+    margin-top: 0.25rem; */
+
+    @apply
+        relative
+        w-full
+
+        border-0
+        shadow-none
+        pl-6
+        mt-1 !important;
 }
 
 
-/* =========================
-   DROPDOWN ITEMS (CORE)
-========================= */
+        /* =========================
+        DROPDOWN ITEMS (CORE)
+        ========================= */
 
 .navbar-vertical .dropdown-item {
   @apply
@@ -88,9 +109,9 @@
 }
 
 
-/* =========================
-   DARK MODE: DROPDOWN ITEMS
-========================= */
+        /* =========================
+        DARK MODE: DROPDOWN ITEMS
+        ========================= */
 
 [data-bs-theme="dark"] .navbar-vertical .dropdown-item {
     @apply
@@ -112,4 +133,39 @@
 
 [data-bs-theme="dark"] .logo-img {
   filter: brightness(0) invert(1);
+}
+
+.main-content {
+  margin-left: 0;
+}
+
+.main-content.with-sidebar {
+  margin-left: 15rem; /* Match your sidebar width */
+}
+
+/* =========================
+    RESPONSIVE
+========================= */
+
+/* For mobile/tablet - remove margin when sidebar is closed */
+@media (max-width: 767px) {
+    .main-content.with-sidebar {
+        margin-left: 0;
+    }
+    .toggle-sidebar {
+        order: 2;
+        margin-left: auto;
+    }
+    .sidebar {
+        width: -webkit-fill-available !important;
+    }
+    .navbar-vertical .navbar-brand {
+            /*padding: .25rem 0;*/
+            @apply py-1 !important;
+    }
+    .navbar-brand
+    , header.navbar {
+        /*min-height: 0rem;*/
+        @apply min-h-0 !important;
+    }
 }

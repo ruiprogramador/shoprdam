@@ -1,49 +1,31 @@
-<!-- resources/js/Components/Navbar.vue -->
 <script setup>
+
 import Dropdown from '@/Components/Dropdown.vue';
 import DropdownLink from '@/Components/DropdownLink.vue';
-import NavLink from '@/Components/NavLink.vue';
-import ResponsiveNavLink from '@/Components/ResponsiveNavLink.vue';
-import { ref, onMounted  } from 'vue'
 
-const emit = defineEmits(['toggle-sidebar'])
-// const showingNavigationDropdown = ref(false);
-const theme = ref('light');
-
-const toggleTheme = () => {
-  theme.value = theme.value === 'dark' ? 'light' : 'dark'
-  applyTheme()
-}
-
-const applyTheme = () => {
-  document.documentElement.setAttribute('data-bs-theme', theme.value)
-  localStorage.setItem('theme', theme.value)
-}
-
-onMounted(() => {
-  const savedTheme = localStorage.getItem('theme')
-  if (savedTheme) {
-    theme.value = savedTheme
-  }
-  applyTheme()
+defineProps({
+    sidebarOpen: Boolean,
+    theme: String,
+    isMobile: Boolean
 })
 
+const emit = defineEmits(['toggle-sidebar'])
+const toggleTheme = () => {
+    emit('toggle-theme');
+}
 </script>
 
 <template>
-    <header class="navbar navbar-expand-md navbar-light d-none d-lg-flex">
-        <div class="container-xl">
-
-            <!-- Sidebar toggle -->
-            <button
-                class="btn btn-icon"
-                @click="emit('toggle-sidebar')"
-            >
-                ☰
-            </button>
+    <header class="navbar">
+        <button
+            class="btn btn-icon toggle-sidebar"
+            @click="emit('toggle-sidebar')"
+        >
+            <i :class="sidebarOpen ? 'fas fa-times' : 'fas fa-bars'"></i>
+        </button>
 
         <!-- Right section -->
-        <div class="navbar-nav flex-row order-md-last ms-auto">
+        <div class="navbar-nav flex-row order-md-last ms-auto" v-if="!isMobile">
 
             <!-- Dark mode placeholder -->
             <!-- <a href="#" class="nav-link px-0">
@@ -108,8 +90,6 @@ onMounted(() => {
                     </DropdownLink>
                 </template>
             </Dropdown>
-        </div>
-
         </div>
     </header>
 </template>
