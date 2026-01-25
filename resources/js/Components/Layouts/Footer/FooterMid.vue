@@ -68,7 +68,7 @@ const footerColumns = [];
           <div class="widget-about font-md mb-md-3 mb-lg-3 mb-xl-0">
             <div class="logo mb-30">
               <Link :href="route('home')" class="mb-15">
-                <img src="/assets/imgs/theme/logo.svg" alt="logo" />
+                <img src="img/logo_16x16.png" alt="logo" />
               </Link>
               <p class="font-lg text-heading">Awesome eCommerce store website</p>
             </div>

@@ -28,6 +28,7 @@ const contactNumber = '+0000-000'
                                 <!-- <Link :href="route('account.index')">
                                     My Account</Link>
                                 </li> -->
+                            </li>
                             <li>
                                 <!-- toDo -->
                                 Wishlist

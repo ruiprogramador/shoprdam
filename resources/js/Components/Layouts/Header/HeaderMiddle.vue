@@ -11,9 +11,9 @@ import AccountDropdown from './AccountDropdown.vue'
     <div class="header-middle header-middle-ptb-1 d-none d-lg-block">
         <div class="container">
             <div class="header-wrap">
-                <div class="logo logo-width-1">
+                <div class="header-left logo logo-width-1">
                     <Link :href="route('home')">
-                        <img src="/assets/imgs/theme/logo.svg" alt="logo" />
+                        <img src="img/logo.png" alt="logo" />
                     </Link>
                 </div>
 

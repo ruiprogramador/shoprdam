@@ -9,7 +9,7 @@
 
             <div class="col-xl-4 col-lg-6 col-md-6">
                 <p class="font-sm mb-0">
-                    &copy; 2025, <strong class="text-brand">ShopRDAM</strong> - Ecommerce Template<br />
+                    &copy; 2026, <strong class="text-brand">ShopRDAM</strong> - Ecommerce Template<br />
                     All rights reserved
                 </p>
             </div>

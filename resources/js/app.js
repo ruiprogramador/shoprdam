@@ -1,6 +1,7 @@
 import '../css/app.css';
 import '../css/navbar-vertical.css';
 import '../css/tabler/tabler.min.css';
+import '../css/main.css';
 import '@fortawesome/fontawesome-free/css/all.min.css';
 /*import '../css/tabler/tabler-flags.min.css';
 import '../css/tabler/tabler-payments.min.css';

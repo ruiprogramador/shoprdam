@@ -25,7 +25,7 @@ const searchQuery = ref('')
             <div class="mobile-header-top">
                 <div class="mobile-header-logo">
                     <Link :href="route('home')">
-                        <img src="/assets/imgs/theme/logo.svg" alt="logo" />
+                        <img src="img/logo_16x16.png" alt="logo" />
                     </Link>
                 </div>
                 <div class="mobile-menu-close close-style-wrap close-style-position-inherit">
@@ -74,7 +74,7 @@ const searchQuery = ref('')
                     </div>
                 </div>
 
-                <div class="site-copyright">Copyright 2025 © ShopRDAM. All rights reserved.</div>
+                <div class="site-copyright">Copyright 2026 © ShopRDAM. All rights reserved.</div>
             </div>
         </div>
     </div>

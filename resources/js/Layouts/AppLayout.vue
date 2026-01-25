@@ -1,6 +1,6 @@
 
 <script setup>
-import { ref } from 'vue'
+import { ref, onMounted } from 'vue'
 import { usePage } from '@inertiajs/vue3'
 import AppHeader from '@/Layouts/AppHeader.vue'
 import AppFooter from '@/Layouts/AppFooter.vue'
@@ -10,6 +10,7 @@ import QuickViewModal from '@/Components/Product/QuickViewModal.vue'
 const showMobileMenu = ref(false)
 const showQuickView = ref(false)
 const selectedProduct = ref(null)
+const isLoading = ref(true)
 
 const page = usePage()
 
@@ -22,6 +23,12 @@ const closeQuickView = () => {
   showQuickView.value = false
   selectedProduct.value = null
 }
+
+onMounted(() => {
+  setTimeout(() => {
+    isLoading.value = false
+  }, 1000) // 1000ms delay
+})
 </script>
 
 <template>
@@ -40,11 +47,11 @@ const closeQuickView = () => {
     <AppFooter />
 
     <!-- Preloader -->
-    <div id="preloader-active">
+    <div v-if="isLoading" id="preloader-active">
       <div class="preloader d-flex align-items-center justify-content-center">
         <div class="preloader-inner position-relative">
           <div class="text-center">
-            <img src="/assets/imgs/theme/loading.gif" alt="Loading" />
+            <img src="img/loading.gif" alt="Loading" />
           </div>
         </div>
       </div>
