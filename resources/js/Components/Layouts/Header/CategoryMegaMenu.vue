@@ -1,0 +1,66 @@
+<script setup>
+import { ref, onMounted } from 'vue'
+import { Link } from '@inertiajs/vue3'
+import axios from 'axios'
+
+const categories = ref([])
+const hoveredCategory = ref(null)
+
+onMounted(async () => {
+/*     try {
+        const response = await axios.get('/api/categories/menu')
+        categories.value = response.data.data
+    } catch (error) {
+        console.error('Error fetching categories:', error)
+        // Fallback data
+        categories.value = [
+        {
+            id: 1,
+            name: "Men's Clothing",
+            slug: 'mens-clothing',
+            icon: '/assets/imgs/theme/icons/category-1.svg',
+            children: [
+            { id: 11, name: 'Shirts', slug: 'shirts' },
+            { id: 12, name: 'Pants', slug: 'pants' },
+            { id: 13, name: 'Jackets', slug: 'jackets' }
+            ]
+        }
+        ]
+    } */
+})
+</script>
+
+<template>
+    <div class="categories-dropdown-wrap style-2 font-heading categories-dropdown-active-large">
+        <div class="d-flex categori-dropdown-inner">
+            <ul>
+                <li
+                    v-for="category in categories"
+                    :key="category.id"
+                    @mouseenter="hoveredCategory = category.id"
+                    @mouseleave="hoveredCategory = null"
+                >
+                    <!-- toDo -->
+                    <!-- <Link :href="route('category.show', category.slug)">
+                        <img :src="category.icon" :alt="category.name" />
+                        {{ category.name }}
+                    </Link> -->
+
+                    <ul v-if="category.children && category.children.length > 0">
+                        <li v-for="child in category.children" :key="child.id">
+                            <!-- toDo -->
+                            <!-- <Link :href="route('category.show', child.slug)">
+                                {{ child.name }}
+                            </Link> -->
+                        </li>
+                    </ul>
+                </li>
+            </ul>
+        </div>
+
+        <!-- toDo -->
+        <!-- <Link :href="route('categories.index')" class="more_categories">
+            view all <i class="fa-solid fa-arrow-right"></i>
+        </Link> -->
+    </div>
+</template>
