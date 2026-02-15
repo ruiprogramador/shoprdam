@@ -1,6 +1,6 @@
 <template>
 
-    <Head :title="title" />
+    <!-- <Head :title="title" /> -->
 
     <div class="page page-center">
         <div v-if="status" class="mb-4 text-sm font-medium text-green-600">
