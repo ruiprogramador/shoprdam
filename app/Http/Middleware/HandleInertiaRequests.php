@@ -123,12 +123,12 @@ class HandleInertiaRequests extends Middleware
             return [];
         }
 
-        $routeName = $route->getName();
-        $segments = explode('.', $routeName);
+        $routeName  = $route->getName();
+        $segments   = explode('.', $routeName);
+        $parameters = $route->parameters();
 
         $breadcrumbs = [];
 
-        // ✅ Always add Home first (if not already on home)
         if ($routeName !== 'home' && $this->route_exists('home')) {
             $breadcrumbs[] = [
                 'label' => 'Home',
@@ -141,14 +141,25 @@ class HandleInertiaRequests extends Middleware
         foreach ($segments as $segment) {
             $currentRoute .= ($currentRoute ? '.' : '') . $segment;
 
+            $url = null;
+
+            if ($this->route_exists($currentRoute)) {
+                try {
+                    $url = route($currentRoute, $parameters);
+                } catch (\Throwable $e) {
+                    $url = null;
+                }
+            }
+
             $breadcrumbs[] = [
                 'label' => ucfirst(str_replace('-', ' ', $segment)),
-                'url'   => $this->route_exists($currentRoute) ? route($currentRoute) : null,
+                'url'   => $url,
             ];
         }
 
         return $breadcrumbs;
     }
+
 
     /**
      * Check if a route exists
