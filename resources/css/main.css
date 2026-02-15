@@ -2602,7 +2602,7 @@ input.qty-val {
 }
 
 .breadcrumb {
-  display: inline-block;
+  /* display: inline-block; */
   padding: 0;
   text-transform: capitalize;
   color: #7E7E7E;
@@ -2617,13 +2617,6 @@ input.qty-val {
   position: relative;
   text-align: center;
   padding: 0 10px;
-}
-
-.breadcrumb span::before {
-  content: "\f111";
-  font-family: "uicons-regular-straight" !important;
-  display: inline-block;
-  font-size: 9px;
 }
 
 /*****************************
