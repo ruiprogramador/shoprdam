@@ -43,9 +43,9 @@ Route::middleware('auth')->group(function () {
 
     // Dashboard Route
     Route::get('/dashboard', function () {
-        return Inertia::render('Dashboard');
+        return Inertia::render('Dashboard/Index');
     })->name('dashboard');
 });
 
-require __DIR__.'/auth.php';
-require __DIR__.'/admin.php';
+require __DIR__ . '/auth.php';
+require __DIR__ . '/admin.php';
