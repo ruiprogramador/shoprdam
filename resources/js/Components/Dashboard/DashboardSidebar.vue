@@ -1,5 +1,7 @@
 <script setup lang="ts">
 
+import { Link } from '@inertiajs/vue3';
+
 const props = defineProps({
     activeTab: {
         type: String,
@@ -31,7 +33,8 @@ const handleLogout = (event: Event) => {
                     href="#"
                     @click.prevent="changeTab('dashboard')"
                 >
-                    <i class="fa-solid fa-sliders mr-10"></i>Dashboard
+                    <i class="fa-solid fa-sliders mr-10"></i>
+                    <span>Dashboard</span>
                 </a>
             </li>
             <li class="nav-item">
@@ -41,7 +44,8 @@ const handleLogout = (event: Event) => {
                     href="#"
                     @click.prevent="changeTab('orders')"
                 >
-                    <i class="fi-rs-shopping-bag mr-10"></i>Orders
+                    <i class="fa-solid fa-truck-fast ml-10"></i>
+                    <span>Orders</span>
                 </a>
             </li>
             <li class="nav-item">
@@ -51,7 +55,8 @@ const handleLogout = (event: Event) => {
                     href="#"
                     @click.prevent="changeTab('track-orders')"
                 >
-                    <i class="fa-solid fa-truck mr-10"></i>Track Your Order
+                    <i class="fa-solid fa-truck mr-10"></i>
+                    <span>Track Your Order</span>
                 </a>
             </li>
             <li class="nav-item">
@@ -61,7 +66,8 @@ const handleLogout = (event: Event) => {
                     href="#"
                     @click.prevent="changeTab('address')"
                 >
-                    <i class="fa-solid fa-marker mr-10"></i>My Address
+                    <i class="fa-solid fa-marker mr-10"></i>
+                    <span>My Address</span>
                 </a>
             </li>
             <li class="nav-item">
@@ -71,7 +77,8 @@ const handleLogout = (event: Event) => {
                     href="#"
                     @click.prevent="changeTab('account-detail')"
                 >
-                    <i class="fa-solid fa-user mr-10"></i>Account details
+                    <i class="fa-solid fa-user mr-10"></i>
+                    <span>Account details</span>
                 </a>
             </li>
             <li class="nav-item">
@@ -81,13 +88,20 @@ const handleLogout = (event: Event) => {
                     href="#"
                     @click.prevent="changeTab('wishlist-tab')"
                 >
-                    <i class="fa-solid fa-heart mr-10"></i> Wishlist
+                    <i class="fa-solid fa-heart mr-10"></i>
+                    <span>Wishlist</span>
                 </a>
             </li>
             <li class="nav-item">
-                <a class="nav-link" href="/login" @click="handleLogout">
-                    <i class="fa-solid fa-sign-out mr-10"></i>Logout
-                </a>
+                <Link
+                    :href="route('logout')"
+                    method="post"
+                    as="button"
+                    class="nav-link"
+                >
+                    <i class="fa-solid fa-sign-out mr-10"></i>
+                    <span>Logout</span>
+                </Link>
             </li>
         </ul>
     </div>

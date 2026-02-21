@@ -62,14 +62,14 @@ export const useDashboardStore = defineStore(
                 id: '1',
                 name: 'Organic Cage-Free Grade A Large Brown Eggs',
                 price: '$28.85',
-                image: '/assets/imgs/shop/product-1-1.jpg',
+                image: '/img/product-1.png',
                 inStock: true,
             },
             {
                 id: '2',
                 name: 'Seeds of Change Organic Quinoa',
                 price: '$32.85',
-                image: '/assets/imgs/shop/product-2-1.jpg',
+                image: '/img/product-2.png',
                 inStock: true,
             },
         ])
