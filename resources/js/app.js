@@ -4,6 +4,8 @@ import '../css/tabler/tabler.min.css'
 import '../css/main.css'
 import '@fortawesome/fontawesome-free/css/all.min.css'
 
+import 'filepond/dist/filepond.min.css'
+
 import { createApp, h, watch } from 'vue'
 import { createInertiaApp } from '@inertiajs/vue3'
 import { resolvePageComponent } from 'laravel-vite-plugin/inertia-helpers'
@@ -14,6 +16,11 @@ import piniaPluginPersistedstate from 'pinia-plugin-persistedstate'
 
 import Toast, { useToast } from 'vue-toastification'
 import 'vue-toastification/dist/index.css'
+
+import vueFilePond from 'vue-filepond'
+
+import FilePondPluginFileValidateType from 'filepond-plugin-file-validate-type/dist/filepond-plugin-file-validate-type.esm.js';
+import FilePondPluginImagePreview from 'filepond-plugin-image-preview/dist/filepond-plugin-image-preview.esm.js';
 
 /*
 |--------------------------------------------------------------------------
@@ -62,6 +69,9 @@ createInertiaApp({
     setup({ el, App, props, plugin }) {
         const vueApp = createApp({ render: () => h(App, props) })
 
+        // Create FilePond component - https://pqina.nl/filepond/docs/getting-started/installation/vue/
+        const FilePond = vueFilePond(FilePondPluginFileValidateType, FilePondPluginImagePreview);
+
         /*
         |--------------------------------------------------------------------------
         | Register Plugins
@@ -97,6 +107,8 @@ createInertiaApp({
             },
             { immediate: true }
         )
+
+        vueApp.component('FilePond', FilePond)
 
         /*
         |--------------------------------------------------------------------------
