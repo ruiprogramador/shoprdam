@@ -13,6 +13,7 @@
     import WishlistTab from '@/Components/Dashboard/WishlistTab.vue'
     import AppLayout from '@/Layouts/AppLayout.vue';
     import Breadcrumb from '@/Components/Breadcrumb.vue';
+    import Edit from '../Profile/Edit.vue'
 
     // Get page props for flash messages
     const page = usePage()
@@ -106,7 +107,8 @@
                                             class="tab-pane fade"
                                             :class="{ 'active show': dashboardStore.activeTab === 'account-detail' }"
                                         >
-                                            <AccountDetails />
+                                            <!-- <AccountDetails /> -->
+                                            <Edit :must-verify-email="false" :status="null" />
                                         </div>
 
                                         <!-- Wishlist Tab -->
