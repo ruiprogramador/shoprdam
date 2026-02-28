@@ -5,6 +5,7 @@ import '../css/main.css'
 import '@fortawesome/fontawesome-free/css/all.min.css'
 
 import 'filepond/dist/filepond.min.css'
+import 'filepond-plugin-image-preview/dist/filepond-plugin-image-preview.min.css'
 
 import { createApp, h, watch } from 'vue'
 import { createInertiaApp } from '@inertiajs/vue3'

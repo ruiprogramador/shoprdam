@@ -13270,6 +13270,10 @@ textarea.form-control {
     height: auto !important;
 }
 
+.filepond--credits {
+    display: none !important;
+}
+
 /* ====================================
   UPDATE CSS END
 ==================================== */
