@@ -1,25 +1,74 @@
 <script setup>
+import { watch, onMounted } from 'vue';
+
 import InputError from '@/Components/InputError.vue';
 import InputLabel from '@/Components/InputLabel.vue';
 import PrimaryButton from '@/Components/PrimaryButton.vue';
 import TextInput from '@/Components/TextInput.vue';
+import FileUpload from '@/Components/FileUpload.vue';
 import { Link, useForm, usePage } from '@inertiajs/vue3';
 
-defineProps({
-    mustVerifyEmail: {
-        type: Boolean,
-    },
-    status: {
-        type: String,
-    },
+/*
+|--------------------------------------------------------------------------
+| 1. Capture props properly
+|--------------------------------------------------------------------------
+*/
+const props = defineProps({
+    mustVerifyEmail: Boolean,
+    status: String,
+    imageUrl: String,
 });
 
-const user = usePage().props.auth.user;
+/*
+|--------------------------------------------------------------------------
+| 2. Access Inertia page props
+|--------------------------------------------------------------------------
+*/
+const page = usePage();
+const user = page.props.auth?.user ?? page.props.user;
 
 const form = useForm({
-    name: user.name,
-    email: user.email,
+    image: props.imageUrl ?? null,
+    name: user?.name ?? '',
+    email: user?.email ?? '',
 });
+
+/*
+|--------------------------------------------------------------------------
+| 3. Debug everything
+|--------------------------------------------------------------------------
+*/
+onMounted(() => {
+    console.log('---- Component Mounted ----');
+
+    console.log('Props from defineProps():');
+    console.log('mustVerifyEmail:', props.mustVerifyEmail);
+    console.log('status:', props.status);
+
+    console.log('All Inertia page props:');
+    console.log(page.props);
+});
+
+/*
+|--------------------------------------------------------------------------
+| 4. Watch for changes (optional but useful)
+|--------------------------------------------------------------------------
+*/
+watch(() => props.mustVerifyEmail, (value) => {
+    console.log('mustVerifyEmail changed:', value);
+});
+
+watch(() => props.status, (value) => {
+    console.log('status changed:', value);
+});
+
+watch(() => props.imageUrl, (value) => {
+    console.log('imageUrl watch fired, value:', value)
+    if (value) {
+        form.image = value
+        console.log('form.image set to:', form.image)
+    }
+}, { immediate: true })
 </script>
 
 <template>
@@ -38,6 +87,12 @@ const form = useForm({
             @submit.prevent="form.patch(route('profile.update'))"
             class="mt-6 space-y-6"
         >
+            <div>
+                <InputLabel for="image" value="Profile Image" />
+                <FileUpload v-model:src="form.image" class="mt-2" accepted-file-types="image/*" />
+                <InputError class="mt-2" :message="form.errors.image" />
+            </div>
+
             <div>
                 <InputLabel for="name" value="Name" />
 
