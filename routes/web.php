@@ -1,10 +1,10 @@
 <?php
 
-use App\Http\Controllers\User\ProfileController;
 use Illuminate\Foundation\Application;
 use Illuminate\Support\Facades\Route;
 use Inertia\Inertia;
 use Illuminate\Support\Facades\Auth;
+use App\Http\Controllers\User\ProfileController;
 
 Route::get('/', function () {
     if (Auth::check()) {
