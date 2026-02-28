@@ -1,18 +1,39 @@
 <script setup>
+import { computed } from 'vue';
+import { Head, usePage } from '@inertiajs/vue3';
 import AuthenticatedLayout from '@/Layouts/AuthenticatedLayout.vue';
 import DeleteUserForm from './Partials/DeleteUserForm.vue';
 import UpdatePasswordForm from './Partials/UpdatePasswordForm.vue';
 import UpdateProfileInformationForm from './Partials/UpdateProfileInformationForm.vue';
-import { Head } from '@inertiajs/vue3';
+
+/* const props = defineProps({
+    mustVerifyEmail: {
+        type: String,
+        required: false,
+        default: () => usePage().props.mustVerifyEmail || 'DEFAULT_MUST_VERIFY_EMAIL'
+    },
+    status: {
+        type: String,
+        required: false,
+        default: () => usePage().props.status || 'DEFAULT_STATUS'
+    }
+}) */
 
 defineProps({
     mustVerifyEmail: {
         type: Boolean,
+        default: false
     },
     status: {
         type: String,
+        default: null
     },
-});
+    imageUrl: {
+        type: String,
+        default: null
+    }
+})
+
 </script>
 
 <template>
@@ -32,9 +53,16 @@ defineProps({
                 <div
                     class="bg-white p-4 shadow sm:rounded-lg sm:p-8"
                 >
+                    <!-- <UpdateProfileInformationForm
+                        :must-verify-email="props.mustVerifyEmail"
+                        :status="props.status"
+                        :image-url="props.imageUrl"
+                        class="max-w-xl"
+                    /> -->
                     <UpdateProfileInformationForm
                         :must-verify-email="mustVerifyEmail"
                         :status="status"
+                        :image-url="imageUrl"
                         class="max-w-xl"
                     />
                 </div>

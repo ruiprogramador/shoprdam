@@ -21,6 +21,9 @@
     const dashboardStore = useDashboardStore()
 
     const breadcrumbs = computed(() => page.props.breadcrumbs || [])
+    const mustVerifyEmail = computed(() => page.props.mustVerifyEmail)
+    const status = computed(() => page.props.status)
+    const imageUrl = computed(() => page.props.imageUrl)
 
     // Check for flash messages
     onMounted(() => {
@@ -36,6 +39,10 @@
     })
 
     const handleTabChange = (tab: string) => {
+        /* if (tab === 'account-detail') {
+            router.visit(route('profile.edit'))  // Goes to ProfileController
+            return
+        } */
         dashboardStore.setActiveTab(tab)
     }
 
@@ -108,7 +115,9 @@
                                             :class="{ 'active show': dashboardStore.activeTab === 'account-detail' }"
                                         >
                                             <!-- <AccountDetails /> -->
-                                            <Edit :must-verify-email="false" :status="null" />
+                                            <!-- <Edit :must-verify-email="false" :status="null" /> -->
+                                            <!-- <Edit :must-verify-email="props.mustVerifyEmail" :status="props.status" :image-url="props.imageUrl" /> -->
+                                            <Edit :must-verify-email="mustVerifyEmail" :status="status" :image-url="imageUrl" />
                                         </div>
 
                                         <!-- Wishlist Tab -->
