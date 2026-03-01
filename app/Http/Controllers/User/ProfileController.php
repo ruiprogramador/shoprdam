@@ -11,9 +11,10 @@ use Illuminate\Support\Facades\Auth;
 use Illuminate\Support\Facades\Redirect;
 use Inertia\Inertia;
 use Inertia\Response;
-use App\Traits\FileUploadTrait;
+
 use Illuminate\Support\Facades\Storage;
 use App\Models\User;
+use App\Traits\FileUploadTrait;
 
 class ProfileController extends Controller
 {
@@ -45,7 +46,13 @@ class ProfileController extends Controller
             $user->email_verified_at = null;
         }
 
-        $this->handleProfileImage($request, $user);
+        // Add or Replace
+        $user->image = $this->handleFileUpload(
+            $request->file('image'),
+            $user->getOriginal('image'),
+            'profile_images',
+            'public'
+        );
 
         $user->save();
 
@@ -71,31 +78,5 @@ class ProfileController extends Controller
         $request->session()->regenerateToken();
 
         return Redirect::to('/');
-    }
-
-    private function handleProfileImage(ProfileUpdateRequest $request, User $user): void
-    {
-        $oldImage = $user->getOriginal('image');
-
-        if ($request->hasFile('image')) {
-            // dd('New image uploaded:', $request->file('image')); // Debug the uploaded file
-            $user->image = $this->uploadFile(
-                $request->file('image'),
-                'profile_images',
-                'public'
-            );
-            if ($oldImage) {
-                Storage::disk('public')->delete($oldImage);
-            }
-        } elseif ($request->input('image') === null && $oldImage) {
-            Storage::disk('public')->delete($oldImage);
-            $user->image = null;
-        } elseif ($request->input('image') === $oldImage) {
-        } else {
-            if ($oldImage) {
-                Storage::disk('public')->delete($oldImage);
-            }
-            $user->image = null;
-        }
     }
 }
