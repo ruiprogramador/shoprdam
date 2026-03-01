@@ -3,21 +3,36 @@
 namespace App\Traits;
 
 use Illuminate\Http\UploadedFile;
+use Illuminate\Support\Facades\Storage;
 
 trait FileUploadTrait
 {
     /**
      * Upload a file and return its stored path.
      */
-    public function uploadFile(
-        UploadedFile $file,
+    public function handleFileUpload(
+        ?UploadedFile $file,
+        ?string $oldPath = null,
         string $directory = 'uploads',
-        string $disk = 'public'
+        string $disk = 'public',
+        bool $deleteOldIfReplacing = true
     ): ?string {
-        if (! $file->isValid()) {
+
+        if (!$file) {
+            return null;
+        }
+        if (!$file->isValid()) {
             return null;
         }
 
-        return $file->store($directory, $disk);
+        // Store new file
+        $newPath = $file->store($directory, $disk);
+
+        // Delete old file if replacing
+        if ($deleteOldIfReplacing && $oldPath) {
+            Storage::disk($disk)->delete($oldPath);
+        }
+
+        return $newPath;
     }
 }
