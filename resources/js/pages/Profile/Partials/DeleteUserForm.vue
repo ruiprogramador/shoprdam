@@ -24,6 +24,11 @@ const props = defineProps({
     }
 });
 
+const form = useForm({
+    password: '',
+    deleteUserUrl: props.deleteUserUrl
+});
+
 const deleteUser = () => {
     form.delete(route(form.deleteUserUrl), {
         preserveScroll: true,
@@ -32,12 +37,6 @@ const deleteUser = () => {
         onFinish: () => form.reset(),
     });
 };
-
-
-const form = useForm({
-    password: '',
-    deleteUserUrl: props.deleteUserUrl
-});
 
 const closeModal = () => {
     confirmingUserDeletion.value = false;
