@@ -29,7 +29,6 @@ class AuthenticatedSessionController extends Controller
      */
     public function store(AdminLoginRequest $request): RedirectResponse
     {
-        // dd(123);
         $request->authenticate();
 
         $request->session()->regenerate();
@@ -42,7 +41,6 @@ class AuthenticatedSessionController extends Controller
      */
     public function destroy(Request $request): RedirectResponse
     {
-        dd("Logout hit", $request->method(), $request->all());
         Auth::guard('admin')->logout();
 
         $request->session()->invalidate();
