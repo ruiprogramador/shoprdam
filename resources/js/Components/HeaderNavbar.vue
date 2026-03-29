@@ -77,7 +77,7 @@ const toggleTheme = () => {
                 </template>
                 <template #content>
                     <DropdownLink
-                        :href="route('profile.edit')"
+                        :href="route('admin.profile.edit')"
                     >
                         Profile
                     </DropdownLink>

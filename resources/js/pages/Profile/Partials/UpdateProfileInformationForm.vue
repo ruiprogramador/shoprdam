@@ -17,6 +17,10 @@ const props = defineProps({
     mustVerifyEmail: Boolean,
     status: String,
     imageUrl: String,
+    updateProfileUrl: {
+        type: String,
+        default: 'profile.update'
+    }
 });
 
 /*
@@ -31,6 +35,7 @@ const form = useForm({
     image: props.imageUrl ?? null,
     name: user?.name ?? '',
     email: user?.email ?? '',
+    updateProfileUrl: props.updateProfileUrl ?? null
 });
 
 /*
@@ -84,7 +89,7 @@ watch(() => props.imageUrl, (value) => {
         </header>
 
         <form
-            @submit.prevent="form.patch(route('profile.update'))"
+            @submit.prevent="form.patch(route(form.updateProfileUrl))"
             class="mt-6 space-y-6"
         >
             <div>
@@ -148,7 +153,7 @@ watch(() => props.imageUrl, (value) => {
             <div class="flex items-center gap-4">
                 <PrimaryButton :disabled="form.processing">Save</PrimaryButton>
 
-                <Transition
+                <!-- <Transition
                     enter-active-class="transition ease-in-out"
                     enter-from-class="opacity-0"
                     leave-active-class="transition ease-in-out"
@@ -160,7 +165,7 @@ watch(() => props.imageUrl, (value) => {
                     >
                         Saved.
                     </p>
-                </Transition>
+                </Transition> -->
             </div>
         </form>
     </section>

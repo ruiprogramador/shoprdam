@@ -11,18 +11,26 @@ import { nextTick, ref } from 'vue';
 const confirmingUserDeletion = ref(false);
 const passwordInput = ref(null);
 
-const form = useForm({
-    password: '',
-});
-
 const confirmUserDeletion = () => {
     confirmingUserDeletion.value = true;
 
     nextTick(() => passwordInput.value.focus());
 };
 
+const props = defineProps({
+    deleteUserUrl: {
+        type: String,
+        default: 'password.destroy'
+    }
+});
+
+const form = useForm({
+    password: '',
+    deleteUserUrl: props.deleteUserUrl
+});
+
 const deleteUser = () => {
-    form.delete(route('profile.destroy'), {
+    form.delete(route(form.deleteUserUrl), {
         preserveScroll: true,
         onSuccess: () => closeModal(),
         onError: () => passwordInput.value.focus(),
