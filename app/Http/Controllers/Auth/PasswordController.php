@@ -16,6 +16,7 @@ class PasswordController extends Controller
      */
     public function update(Request $request): RedirectResponse
     {
+        dd($request->all());
         $validated = $request->validate([
             'current_password' => ['required', 'current_password:web'],
             'password' => ['required', Password::defaults(), 'confirmed'],

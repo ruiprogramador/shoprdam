@@ -15,7 +15,7 @@ const openManagement = ref(false);
 <template>
     <!-- Dashboard -->
     <li class="nav-item">
-        <NavLink href="#" :active="true">
+        <NavLink :href="route('admin.dashboard')" :active="route().current('admin.dashboard')">
             <i class="fas fa-chart-line me-2"></i>
             Dashboard
         </NavLink>
@@ -58,7 +58,7 @@ const openManagement = ref(false);
 
     <!-- Profile -->
     <li class="nav-item">
-        <NavLink href="#">
+        <NavLink :href="route('admin.profile.edit')" :active="route().current('admin.profile.edit')">
             <i class="fas fa-user-circle me-2"></i>
             Profile
         </NavLink>

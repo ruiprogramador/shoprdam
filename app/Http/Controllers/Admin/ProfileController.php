@@ -1,6 +1,6 @@
 <?php
 
-namespace App\Http\Controllers\User;
+namespace App\Http\Controllers\Admin;
 
 use App\Http\Controllers\Controller;
 use App\Http\Requests\ProfileUpdateRequest;
@@ -13,7 +13,6 @@ use Inertia\Inertia;
 use Inertia\Response;
 
 use Illuminate\Support\Facades\Storage;
-use App\Models\User;
 use App\Traits\FileUploadTrait;
 
 class ProfileController extends Controller
@@ -26,11 +25,13 @@ class ProfileController extends Controller
      */
     public function edit(Request $request): Response
     {
-        dd($request->user());
-        return Inertia::render('Profile/Edit', [
+        return Inertia::render('Admin/Profile/Edit', [
             'mustVerifyEmail' => $request->user() instanceof MustVerifyEmail,
             'status' => session('status'),
             'imageUrl' => $request->user()->image ? Storage::disk('public')->url($request->user()->image) : null,
+            'updateProfileUrl' => 'admin.profile.update',
+            'updatePasswordUrl' => 'admin.password.update',
+            'deleteUserUrl' => 'admin.profile.destroy',
         ]);
     }
 
@@ -71,7 +72,7 @@ class ProfileController extends Controller
 
         $user = $request->user();
 
-        Auth::logout();
+        Auth::guard('admin')->logout();
 
         $user->delete();
 

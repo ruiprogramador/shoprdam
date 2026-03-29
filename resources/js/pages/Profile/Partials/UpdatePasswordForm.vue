@@ -9,14 +9,24 @@ import { ref } from 'vue';
 const passwordInput = ref(null);
 const currentPasswordInput = ref(null);
 
+const props = defineProps({
+    updatePasswordUrl: {
+        type: String,
+        default: 'password.update'
+    }
+});
+
+
 const form = useForm({
     current_password: '',
     password: '',
     password_confirmation: '',
+    updatePasswordUrl: props.updatePasswordUrl
 });
 
-const updatePassword = () => {
-    form.put(route('password.update'), {
+
+/* const updatePassword = () => { // aqui
+    form.put(route('admin.password.update'), {
         preserveScroll: true,
         onSuccess: () => form.reset(),
         onError: () => {
@@ -30,7 +40,7 @@ const updatePassword = () => {
             }
         },
     });
-};
+}; */
 </script>
 
 <template>
@@ -46,7 +56,8 @@ const updatePassword = () => {
             </p>
         </header>
 
-        <form @submit.prevent="updatePassword" class="mt-6 space-y-6">
+        <!-- <form @submit.prevent="updatePassword" class="mt-6 space-y-6"> -->
+        <form @submit.prevent="form.put(route(form.updatePasswordUrl))" class="mt-6 space-y-6">
             <div>
                 <InputLabel for="current_password" value="Current Password" />
 
@@ -103,7 +114,7 @@ const updatePassword = () => {
             <div class="flex items-center gap-4">
                 <PrimaryButton :disabled="form.processing">Save</PrimaryButton>
 
-                <Transition
+                <!-- <Transition
                     enter-active-class="transition ease-in-out"
                     enter-from-class="opacity-0"
                     leave-active-class="transition ease-in-out"
@@ -115,7 +126,7 @@ const updatePassword = () => {
                     >
                         Saved.
                     </p>
-                </Transition>
+                </Transition> -->
             </div>
         </form>
     </section>
