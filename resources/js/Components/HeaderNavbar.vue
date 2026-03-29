@@ -82,7 +82,7 @@ const toggleTheme = () => {
                         Profile
                     </DropdownLink>
                     <DropdownLink
-                        :href="route('logout')"
+                        :href="route('admin.logout')"
                         method="post"
                         as="button"
                     >
