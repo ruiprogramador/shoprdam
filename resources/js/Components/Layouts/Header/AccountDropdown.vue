@@ -55,10 +55,20 @@ export default {
 </script>
 <template>
   <div class="header-action-icon-2">
-    <Link href="/account">
+    <!-- <Link href="/account">
        <i class="fa fa-user"></i>
     </Link>
-    <Link href="/account"><span class="lable ml-0">Account</span></Link>
+    <Link href="/account"><span class="lable ml-0">Account</span></Link> -->
+    <div class="dropdown-content-wrap">
+      <div 
+        class="dropdown-icon-toggle"
+      >
+        <i class="fa fa-user"></i>
+      </div>
+      <div class="lable ml-0 dropdown-icon-text">
+        Account
+      </div>
+    </div>
 
     <div class="cart-dropdown-wrap cart-dropdown-hm2 account-dropdown">
       <ul v-if="isAuthenticated">

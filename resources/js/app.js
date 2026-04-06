@@ -2,6 +2,7 @@ import '../css/app.css'
 import '../css/navbar-vertical.css'
 import '../css/tabler/tabler.min.css'
 import '../css/main.css'
+import '../css/header-navbar.css'
 import '@fortawesome/fontawesome-free/css/all.min.css'
 
 import 'filepond/dist/filepond.min.css'
