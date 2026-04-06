@@ -10,7 +10,6 @@ use Illuminate\Support\Facades\Auth;
 use Illuminate\Support\Facades\Route;
 use Inertia\Inertia;
 use Inertia\Response;
-use phpDocumentor\Reflection\DocBlock\Tags\Var_;
 
 class AuthenticatedSessionController extends Controller
 {
