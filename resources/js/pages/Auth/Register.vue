@@ -8,10 +8,12 @@ import Breadcrumb from '@/Components/Breadcrumb.vue';
 const showPassword = ref(false)
 
 const form = useForm({
-  name: '',
-  email: '',
-  password: '',
-  agree: false
+    name: '',
+    email: '',
+    password: '',
+    password_confirmation: '',
+    agree: false,
+    user_type: '', // Add user_type to the form data
 })
 
 const togglePassword = () => {
@@ -24,6 +26,8 @@ const submit = () => {
 }
 
 const page = usePage()
+
+const userTypes = computed(() => page.props.userTypes || []) // Get user types from page props
 
 const breadcrumbs = computed(() => page.props.breadcrumbs || [])
 
@@ -106,6 +110,18 @@ const breadcrumbs = computed(() => page.props.breadcrumbs || [])
                     </div>
                     <div v-if="form.errors.password_confirmation" class="text-danger mt-1">
                         {{ form.errors.password_confirmation }}
+                    </div>
+                    </div>
+
+                    <!-- User Types -->
+                    <div class="mb-3">
+                    <label class="form-label">User Type</label>
+                    <select v-model="form.user_type" class="form-select">
+                        <option value="" disabled>Select user type</option>
+                        <option v-for="(name, id) in userTypes" :key="id" :value="id">{{ name }}</option>
+                    </select>
+                    <div v-if="form.errors.user_type" class="text-danger mt-1">
+                        {{ form.errors.user_type }}
                     </div>
                     </div>
 

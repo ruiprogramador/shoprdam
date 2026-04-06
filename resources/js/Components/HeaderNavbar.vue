@@ -1,12 +1,45 @@
 <script setup>
 
+import { computed } from 'vue';
 import Dropdown from '@/Components/Dropdown.vue';
 import DropdownLink from '@/Components/DropdownLink.vue';
 
-defineProps({
-    sidebarOpen: Boolean,
-    theme: String,
-    isMobile: Boolean
+const props = defineProps(['sidebarOpen', 'theme', 'isMobile', 'loggedInUser']);
+
+// loggedInUser can be a vendor or a customer or admin but admin doesn't have a type field, so we can check for the presence of the type field to determine if it's a vendor or customer
+// and route edit and logout accordingly 
+const userType = computed(() => {
+    if (props?.loggedInUser?.user_type_id === 2) return 'vendor';
+    return 'admin';
+})
+console.log("User type:");
+console.log(userType.value);
+console.log("props.loggedInUser:");
+console.log(props.loggedInUser);
+
+const profileRoute = computed(() => {
+    switch (userType.value) {
+        case 'admin':
+            return route('admin.profile.edit');
+        /* case 'vendor':
+            return route('profile.edit');
+        case 'customer':
+            return route('customer.profile.edit'); */
+        default:
+            return route('profile.edit');
+    }
+})
+const logoutRoute = computed(() => {
+    switch (userType.value) {
+        case 'admin':
+            return route('admin.logout');
+        /* case 'vendor':
+            return route('vendor.logout');
+        case 'customer':
+            return route('customer.logout'); */
+        default:
+            return route('logout');
+    }
 })
 
 const emit = defineEmits(['toggle-sidebar'])
@@ -76,13 +109,25 @@ const toggleTheme = () => {
                     </span>
                 </template>
                 <template #content>
-                    <DropdownLink
+                    <!-- <DropdownLink
                         :href="route('admin.profile.edit')"
                     >
                         Profile
-                    </DropdownLink>
+                    </DropdownLink> -->
                     <DropdownLink
+                        :href="profileRoute"
+                    >
+                        Profile
+                    </DropdownLink>
+                    <!-- <DropdownLink
                         :href="route('logout')"
+                        method="post"
+                        as="button"
+                    >
+                        Log Out
+                    </DropdownLink> -->
+                    <DropdownLink
+                        :href="logoutRoute"
                         method="post"
                         as="button"
                     >

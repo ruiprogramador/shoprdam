@@ -8,7 +8,11 @@ use App\Http\Controllers\User\ProfileController;
 
 Route::get('/', function () {
     if (Auth::check()) {
-        return redirect()->route('dashboard'); // user is logged in
+        if (auth('web')->user()->userType->id === 2) {
+            return redirect()->route('vendor.dashboard'); // Redirect to vendor dashboard if user type is vendor
+        }else {
+            return redirect()->route('dashboard'); // Redirect to user dashboard if user type is user
+        }
     }
 
     return Inertia::render('Home', [
@@ -40,9 +44,17 @@ Route::middleware('auth:web')->group(function () {
     Route::get('/profile', [ProfileController::class, 'edit'])->name('profile.edit');
     Route::patch('/profile', [ProfileController::class, 'update'])->name('profile.update');
     Route::delete('/profile', [ProfileController::class, 'destroy'])->name('profile.destroy');
+});
 
+Route::middleware(['auth:web', 'role:user'])->group(function () {
     // Dashboard Route
     Route::get('/dashboard', [App\Http\Controllers\User\DashboardController::class, 'index'])->name('dashboard');
+});
+
+Route::middleware(['auth:web', 'role:vendor'])->group(function () {
+    // Vendor Dashboard Route
+    Route::get('/vendor/dashboard', [App\Http\Controllers\Vendor\DashboardController::class, 'index'])->name('vendor.dashboard');
+
 });
 
 require __DIR__ . '/auth.php';

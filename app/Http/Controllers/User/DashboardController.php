@@ -12,7 +12,9 @@ class DashboardController extends Controller
 {
     public function index(Request $request)
     {
-        //dd($request->user()->image); // Debug the user's image path
+        if(auth('web')->user()->userType->id === 2) {
+            dd("User type is vendor, redirecting to vendor dashboard"); 
+        }
         return Inertia::render('Dashboard/Index', [
             'mustVerifyEmail' => $request->user() instanceof MustVerifyEmail,
             'status' => session('status'),

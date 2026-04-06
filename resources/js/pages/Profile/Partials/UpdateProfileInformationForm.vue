@@ -74,6 +74,7 @@ watch(() => props.imageUrl, (value) => {
         console.log('form.image set to:', form.image)
     }
 }, { immediate: true })
+
 </script>
 
 <template>
