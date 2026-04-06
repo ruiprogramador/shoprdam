@@ -26,11 +26,27 @@ class ProfileController extends Controller
      */
     public function edit(Request $request): Response
     {
-        return Inertia::render('Profile/Edit', [
+        /* return Inertia::render('Profile/Edit', [
             'mustVerifyEmail' => $request->user() instanceof MustVerifyEmail,
             'status' => session('status'),
             'imageUrl' => $request->user()->image ? Storage::disk('public')->url($request->user()->image) : null,
-        ]);
+        ]); */
+        if ($request->user()->userType->id === 2) {
+            return Inertia::render('Vendor/Profile/Edit', [
+                'mustVerifyEmail' => $request->user() instanceof MustVerifyEmail,
+                'status' => session('status'),
+                'imageUrl' => $request->user()->image ? Storage::disk('public')->url($request->user()->image) : null,
+                'updateProfileUrl' => 'profile.update',
+                'updatePasswordUrl' => 'password.update',
+                'deleteUserUrl' => 'profile.destroy',
+            ]);
+        } else {
+            return Inertia::render('Profile/Edit', [
+                'mustVerifyEmail' => $request->user() instanceof MustVerifyEmail,
+                'status' => session('status'),
+                'imageUrl' => $request->user()->image ? Storage::disk('public')->url($request->user()->image) : null
+            ]);
+        }
     }
 
     /**
@@ -70,7 +86,7 @@ class ProfileController extends Controller
 
         $user = $request->user();
 
-        Auth::logout();
+        Auth::guard('web')->logout();
 
         $user->delete();
 

@@ -12,6 +12,7 @@ use Illuminate\Support\Facades\Hash;
 use Illuminate\Validation\Rules;
 use Inertia\Inertia;
 use Inertia\Response;
+use Illuminate\Support\Facades\DB;
 
 class RegisteredUserController extends Controller
 {
@@ -20,7 +21,8 @@ class RegisteredUserController extends Controller
      */
     public function create(): Response
     {
-        return Inertia::render('Auth/Register');
+        $userTypes = DB::table('user_types')->pluck('name', 'id'); // Fetch user types from the database
+        return Inertia::render('Auth/Register')->with('userTypes', $userTypes); // Pass user types to the view
     }
 
     /**
@@ -34,18 +36,24 @@ class RegisteredUserController extends Controller
             'name' => 'required|string|max:255',
             'email' => 'required|string|lowercase|email|max:255|unique:'.User::class,
             'password' => ['required', 'confirmed', Rules\Password::defaults()],
+            'user_type' => 'required|exists:user_types,id', // Validate user_type
         ]);
+        // dd($request->all());
 
         $user = User::create([
             'name' => $request->name,
             'email' => $request->email,
             'password' => Hash::make($request->password),
+            'user_type_id' => $request->user_type, // Set the user_type attribute
         ]);
 
         event(new Registered($user));
 
         Auth::login($user);
 
+        if(auth('web')->user()->userType->id === 2) {
+            return redirect(route('vendor.dashboard', absolute: false)); // Redirect to vendor dashboard if user type is vendor
+        }
         return redirect(route('dashboard', absolute: false));
     }
 }

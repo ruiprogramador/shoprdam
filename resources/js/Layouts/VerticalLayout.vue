@@ -1,5 +1,6 @@
 <script setup>
 import { ref, onMounted, onUnmounted } from 'vue'
+import { usePage } from '@inertiajs/vue3'
 import Sidebar from '@/Components/Sidebar.vue'
 import HeaderNavbar from '@/Components/HeaderNavbar.vue'
 import VerticalMenu from '@/Components/VerticalMenu.vue'
@@ -8,6 +9,8 @@ const sidebarOpen = ref(true);
 const BREAKPOINT = 768;
 const theme = ref('light');
 const isMobile = ref(false);
+const page = usePage();
+const loggedInUser = ref(page.props.auth.user);
 
 const updateByWidth = () => {
   sidebarOpen.value = window.innerWidth >= BREAKPOINT
@@ -55,6 +58,7 @@ onUnmounted(() => {
                     @toggle-theme="toggleTheme"
                     :theme="theme"
                     :is-mobile="isMobile"
+                    :logged-in-user="loggedInUser"
                 />
             </template>
         </Sidebar>
@@ -70,6 +74,7 @@ onUnmounted(() => {
                 @toggle-theme="toggleTheme"
                 :theme="theme"
                 :is-mobile="isMobile"
+                :logged-in-user="loggedInUser"
             />
 
             <main class="p-4">

@@ -6,6 +6,7 @@ namespace App\Models;
 use Illuminate\Database\Eloquent\Factories\HasFactory;
 use Illuminate\Foundation\Auth\User as Authenticatable;
 use Illuminate\Notifications\Notifiable;
+use App\Models\UserType;
 
 class User extends Authenticatable
 {
@@ -22,6 +23,7 @@ class User extends Authenticatable
         'email',
         'password',
         'image',
+        'user_type_id', // Add user_type to the fillable attributes
     ];
 
     /**
@@ -45,5 +47,25 @@ class User extends Authenticatable
             'email_verified_at' => 'datetime',
             'password' => 'hashed',
         ];
+    }
+
+    public function userType()
+    {
+        return $this->belongsTo(UserType::class);
+    }
+
+    public function isVendor()
+    {
+        return $this->userType && $this->userType->id === 2;
+    }
+
+    public function hasRole($role)
+    {
+        return strtolower($this->userType->name) === strtolower($role);
+    }
+
+    public function hasAnyRole(array $roles)
+    {
+        return in_array(strtolower($this->userType->name), array_map('strtolower', $roles));
     }
 }

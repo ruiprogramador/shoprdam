@@ -33,8 +33,20 @@ class AuthenticatedSessionController extends Controller
 
         $request->session()->regenerate();
 
+         // Redirect based on user type
+
         // return redirect()->intended(route('dashboard', absolute: false));
-        return redirect()->intended(route('dashboard'));
+        // return redirect()->intended(route('dashboard'));
+
+        /**
+         * User/Vendor Dashboard
+         */
+        // if (Auth::user()->userType->id === 2) {
+        if (auth('web')->user()->userType->id === 2) {
+            return redirect()->intended(route('vendor.dashboard', absolute: false));
+        } else {
+            return redirect()->intended(route('dashboard', absolute: false));
+        }
     }
 
     /**
