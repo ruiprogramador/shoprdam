@@ -15,6 +15,7 @@
         "laravel/sanctum": "^4.0",
         "laravel/tinker": "^2.10.1",
         "laravel/wayfinder": "^0.1.11",
+        "lorisleiva/laravel-actions": "^2.10",
         "nnjeim/world": "^1.1",
         "tightenco/ziggy": "^2.0"
     },
