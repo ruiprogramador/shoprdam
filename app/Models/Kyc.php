@@ -6,6 +6,15 @@ use Illuminate\Database\Eloquent\Model;
 use Illuminate\Database\Eloquent\Relations\BelongsTo;
 use Illuminate\Database\Eloquent\Relations\HasMany;
 use Illuminate\Database\Eloquent\SoftDeletes;
+use App\Models\User;
+use App\Models\KycStatus;
+use App\Models\Admin;
+use App\Models\Country;
+use App\Models\State;
+use App\Models\City;
+use App\Models\Gender;
+use App\Models\KycDocument;
+use App\Models\KycHistory;
 
 class Kyc extends Model
 {
@@ -48,7 +57,7 @@ class Kyc extends Model
 
     public function reviewer(): BelongsTo
     {
-        return $this->belongsTo(User::class, 'reviewed_by');
+        return $this->belongsTo(Admin::class, 'reviewed_by');
     }
 
     public function country(): BelongsTo
@@ -124,7 +133,8 @@ class Kyc extends Model
 
     public function isExpired()
     {
-        return $this->expires_at && $this->expires_at->isPast();
+        // return $this->expires_at && $this->expires_at->isPast();
+        return $this->kycStatus?->slug === 'expired' || ($this->expires_at && $this->expires_at->isPast());
     }
 
     public function canBeReviewed()
@@ -174,7 +184,7 @@ class Kyc extends Model
     /**
      * Transition to a new status and record in history.
      */
-    public function transitionToStatus(KycStatus $newStatus, ?User $reviewer = null, ?string $notes = null)
+    public function transitionToStatus(KycStatus $newStatus, ?Admin $reviewer = null, ?string $notes = null)
     {
         $oldStatus = $this->kycStatus;
 
