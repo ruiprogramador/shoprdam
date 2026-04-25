@@ -7,6 +7,8 @@ use Illuminate\Database\Eloquent\Factories\HasFactory;
 use Illuminate\Foundation\Auth\User as Authenticatable;
 use Illuminate\Notifications\Notifiable;
 use App\Models\UserType;
+use App\Models\Kyc;
+use Illuminate\Database\Eloquent\Relations\HasOne;
 
 class User extends Authenticatable
 {
@@ -54,18 +56,44 @@ class User extends Authenticatable
         return $this->belongsTo(UserType::class);
     }
 
-    public function isVendor()
-    {
-        return $this->userType && $this->userType->id === 2;
-    }
-
     public function hasRole($role)
     {
-        return strtolower($this->userType->name) === strtolower($role);
+        return $this->userType && strtolower($this->userType->name) === strtolower($role);
     }
 
     public function hasAnyRole(array $roles)
     {
-        return in_array(strtolower($this->userType->name), array_map('strtolower', $roles));
+        return $this->userType && in_array(strtolower($this->userType->name), array_map('strtolower', $roles));
+    }
+
+    
+    public function isVendor()
+    {
+        // return $this->userType && $this->userType->id === 2;
+        return $this->hasRole('vendor');
+    }
+
+    /**
+     * Get the user's KYC record (latest if multiple exist).
+     */
+    public function kyc(): HasOne
+    {
+        return $this->hasOne(Kyc::class)->latestOfMany();
+    }
+
+    /**
+     * Get the user's KYC records history (all records).
+     */
+    public function kycs(){
+        return $this->hasMany(Kyc::class)->orderBy('created_at', 'desc');
+    }
+
+    public function canSubmitKyc()
+    {
+        return $this->isVendor() && (
+            ! $this->kyc ||
+            $this->kyc->isRejected() ||
+            $this->kyc->isExpired()
+        );
     }
 }
