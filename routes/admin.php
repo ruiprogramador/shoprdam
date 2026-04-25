@@ -10,6 +10,7 @@ use App\Http\Controllers\Admin\Auth\PasswordResetLinkController;
 use App\Http\Controllers\Admin\Auth\RegisteredUserController;
 use App\Http\Controllers\Admin\Auth\VerifyEmailController;
 use App\Http\Controllers\Admin\ProfileController;
+use App\Http\Controllers\Admin\KYCController;
 use Illuminate\Support\Facades\Route;
 use Inertia\Inertia;
 
@@ -78,4 +79,13 @@ Route::middleware('auth:admin')
         Route::get('/profile', [ProfileController::class, 'edit'])->name('profile.edit');
         Route::patch('/profile', [ProfileController::class, 'update'])->name('profile.update');
         Route::delete('/profile', [ProfileController::class, 'destroy'])->name('profile.destroy');
+
+        // Admin KYC Management Routes
+        Route::prefix('kyc')->name('kyc.')->group(function () {
+            Route::get('/', [KYCController::class, 'index'])->name('index');
+            Route::get('/{id}', [KYCController::class, 'show'])->name('show');
+            Route::post('/{id}/review', [KYCController::class, 'review'])->name('review');
+            // Route::post('/{id}/approve', [KYCController::class, 'approve'])->name('approve');
+            // Route::post('/{id}/reject', [KYCController::class, 'reject'])->name('reject');
+        });
     });

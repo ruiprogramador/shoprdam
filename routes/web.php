@@ -5,6 +5,7 @@ use Illuminate\Support\Facades\Route;
 use Inertia\Inertia;
 use Illuminate\Support\Facades\Auth;
 use App\Http\Controllers\User\ProfileController;
+use App\Http\Controllers\Vendor\KycController;
 
 Route::get('/', function () {
     if (Auth::check()) {
@@ -54,6 +55,15 @@ Route::middleware(['auth:web', 'role:user'])->group(function () {
 Route::middleware(['auth:web', 'role:vendor'])->group(function () {
     // Vendor Dashboard Route
     Route::get('/vendor/dashboard', [App\Http\Controllers\Vendor\DashboardController::class, 'index'])->name('vendor.dashboard');
+
+    // Vendor KYC Routes
+    Route::prefix('vendor/kyc')->name('vendor.kyc.')->group(function () {
+        Route::get('/', [KYCController::class, 'index'])->name('index');
+        Route::get('/create', [KYCController::class, 'create'])->name('create');
+        Route::post('/', [KYCController::class, 'store'])->name('store');
+        Route::get('/edit', [KYCController::class, 'edit'])->name('edit');
+        Route::put('/', [KYCController::class, 'update'])->name('update');
+    });
 
 });
 
