@@ -3,20 +3,11 @@
 namespace App\Listeners;
 
 use Illuminate\Contracts\Queue\ShouldQueue;
-use Illuminate\Queue\InteractsWithQueue;
 use App\Models\Admin;
 use App\Notifications\KycUpdatedNotification;
 
 class NotifyAdminKycUpdated implements ShouldQueue
 {
-    /**
-     * Create the event listener.
-     */
-    /* public function __construct()
-    {
-        //
-    } */
-
     /**
      * Handle the event.
      */

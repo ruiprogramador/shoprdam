@@ -3,21 +3,12 @@
 namespace App\Listeners;
 
 use Illuminate\Contracts\Queue\ShouldQueue;
-use Illuminate\Queue\InteractsWithQueue;
 use App\Events\KycSubmitted;
 use App\Models\Admin;
 use App\Notifications\KycSubmittedNotification;
 
 class NotifyAdminKycSubmitted implements ShouldQueue
 {
-    /**
-     * Create the event listener.
-     */
-    /* public function __construct()
-    {
-        //
-    } */
-
     /**
      * Handle the event.
      */

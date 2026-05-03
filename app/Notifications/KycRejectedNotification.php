@@ -50,7 +50,7 @@ class KycRejectedNotification extends Notification implements ShouldQueue
      *
      * @return array<string, mixed>
      */
-    public function toArray(object $notifiable): array
+    public function toDatabase(object $notifiable): array
     {
         return [
             'kyc_id'           => $this->kyc->id,
