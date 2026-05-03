@@ -19,6 +19,7 @@ return Application::configure(basePath: dirname(__DIR__))
             __DIR__.'/../routes/auth.php',
         ],*/
         commands: __DIR__.'/../routes/console.php',
+        channels: __DIR__.'/../routes/channels.php',
         health: '/up',
         then: function (Application $app): void {
             Route::fallback(function () {
