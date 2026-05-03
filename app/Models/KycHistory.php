@@ -10,6 +10,9 @@ use App\Models\KycStatus;
 
 class KycHistory extends Model
 {
+
+    protected $table = 'kyc_history';
+
     protected $fillable = [
         'kyc_id',
         'reviewed_by',

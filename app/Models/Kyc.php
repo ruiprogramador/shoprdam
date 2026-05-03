@@ -110,6 +110,11 @@ class Kyc extends Model
         return $query->where('expires_at', '>=', now())->where('expires_at', '<=', now()->addDays(30));
     }
 
+    public function scopeForStatus($query, $statusSlug)
+    {
+        return $query->whereHas('kycStatus', fn($q) => $q->where('slug', $statusSlug));
+    }
+
     // Helpers
     public function isPending()
     {
