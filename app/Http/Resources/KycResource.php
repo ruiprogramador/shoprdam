@@ -8,6 +8,8 @@ use Illuminate\Http\Resources\Json\JsonResource;
 
 class KycResource extends JsonResource
 {
+    // public static $wrap = null;
+
     /**
      * Transform the resource into an array.
      *
@@ -19,7 +21,7 @@ class KycResource extends JsonResource
         return array(
             'id'                    => $this->id,
             'full_name'             => $this->full_name,
-            'date_of_birth'         => $this->date_of_birth->format('Y-m-d'),
+            'date_of_birth'         => $this->date_of_birth?->format('Y-m-d'),
             'gender_id'             => $this->gender_id,
             'gender_other'          => $this->gender_other,
             'address_line1'         => $this->address_line1,
@@ -44,13 +46,35 @@ class KycResource extends JsonResource
             /**
              * Relationships
              */
-            'status'    => KycStatusResource::make($this->whenLoaded('kycStatus')),
+            /* 'status'    => KycStatusResource::make($this->whenLoaded('kycStatus')),
             'country'   => CountryResource::make($this->whenLoaded('country')),
             'state'     => StateResource::make($this->whenLoaded('state')),
             'city'      => CityResource::make($this->whenLoaded('city')),
             'gender'    => GenderResource::make($this->whenLoaded('gender')),
             'documents' => KycDocumentResource::collection($this->whenLoaded('documents')),
-            'history'   => KycHistoryResource::collection($this->whenLoaded('history')),
+            'history'   => KycHistoryResource::collection($this->whenLoaded('history')), */
+
+            'status' => $this->whenLoaded('kycStatus', fn () =>
+                KycStatusResource::make($this->kycStatus)->resolve()
+            ),
+            'country' => $this->whenLoaded('country', fn () =>
+                CountryResource::make($this->country)->resolve()
+            ),
+            'state' => $this->whenLoaded('state', fn () =>
+                StateResource::make($this->state)->resolve()
+            ),
+            'city' => $this->whenLoaded('city', fn () =>
+                CityResource::make($this->city)->resolve()
+            ),
+            'gender' => $this->whenLoaded('gender', fn () =>
+                GenderResource::make($this->gender)->resolve()
+            ),
+            'documents' => $this->whenLoaded('documents', fn () =>
+                KycDocumentResource::collection($this->documents)->resolve()
+            ),
+            'history' => $this->whenLoaded('history', fn () =>
+                KycHistoryResource::collection($this->history)->resolve()
+            ),
             'user'      => $this->whenLoaded('user', fn () => [
                 'id'    => $this->user->id,
                 'name'  => $this->user->name,

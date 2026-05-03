@@ -23,8 +23,17 @@ class KycDocumentResource extends JsonResource
             'mime_type'     => $this->mime_type,
             'file_size'     => $this->file_size,
             'url'           => $this->url,
-            'document_type' => DocumentTypeResource::make($this->whenLoaded('documentType')),
-            'document_side' => DocumentSideResource::make($this->whenLoaded('documentSide')),
+            /* 'document_type' => DocumentTypeResource::make($this->whenLoaded('documentType')),
+            'document_side' => DocumentSideResource::make($this->whenLoaded('documentSide')), */
+
+            'document_type' => $this->whenLoaded('documentType', fn () =>
+                DocumentTypeResource::make($this->documentType)->resolve()
+            ),
+            'document_side' => $this->whenLoaded('documentSide', fn () =>
+                $this->documentSide
+                    ? DocumentSideResource::make($this->documentSide)->resolve()
+                    : null
+            ),
             'created_at'    => $this->created_at,
         ];
     }
