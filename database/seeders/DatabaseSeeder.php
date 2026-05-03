@@ -24,10 +24,11 @@ class DatabaseSeeder extends Seeder
         // $this->call(AdminSeeder::class);
 
         $this->call([
-            AdminSeeder::class,
+            // AdminSeeder::class,
             GenderSeeder::class,
             DocumentSideSeeder::class,
             KycStatusSeeder::class,
+            WorldSeeder::class,
         ]);
     }
 }
