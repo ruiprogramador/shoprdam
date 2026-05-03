@@ -6,8 +6,9 @@ use Lorisleiva\Actions\Concerns\AsAction;
 use App\Models\Kyc;
 use App\Models\KycStatus;
 use App\Models\Admin;
-use App\Models\KycHistory;
-use Illuminate\Support\Facades\DB;
+use App\Events\KycApproved;
+use App\Events\KycRejected;
+
 use Exception;
 
 class ReviewKycAction
@@ -35,10 +36,12 @@ class ReviewKycAction
 
         if ($action === 'approve') {
             $kyc->update(['expires_at' => now()->addYears(config('kyc.expiration_years', 1))]); // Set expiration date for approved KYC
-            // event(new KycApproved($kyc)); // Trigger KYC approved event for notifications, etc.
-        }else{
-            // event(new KycRejected($kyc)); // Trigger KYC rejected event for notifications, etc.
         }
+
+        match ($action) {
+            'approve' => KycApproved::dispatch($kyc),
+            'reject'  => KycRejected::dispatch($kyc),
+        };
 
         return $kyc->fresh();
     }
