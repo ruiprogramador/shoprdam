@@ -10,7 +10,7 @@ use App\Http\Controllers\Admin\Auth\PasswordResetLinkController;
 use App\Http\Controllers\Admin\Auth\RegisteredUserController;
 use App\Http\Controllers\Admin\Auth\VerifyEmailController;
 use App\Http\Controllers\Admin\ProfileController;
-use App\Http\Controllers\Admin\KYCController;
+use App\Http\Controllers\Admin\KycController;
 use Illuminate\Support\Facades\Route;
 use Inertia\Inertia;
 
@@ -82,10 +82,11 @@ Route::middleware('auth:admin')
 
         // Admin KYC Management Routes
         Route::prefix('kyc')->name('kyc.')->group(function () {
-            Route::get('/', [KYCController::class, 'index'])->name('index');
-            Route::get('/{id}', [KYCController::class, 'show'])->name('show');
-            Route::post('/{id}/review', [KYCController::class, 'review'])->name('review');
-            // Route::post('/{id}/approve', [KYCController::class, 'approve'])->name('approve');
-            // Route::post('/{id}/reject', [KYCController::class, 'reject'])->name('reject');
+            Route::get('/export', [KycController::class, 'export'])->name('export');
+            Route::get('/', [KycController::class, 'index'])->name('index');
+            Route::get('/{kyc}', [KycController::class, 'show'])->name('show');
+            Route::post('/{kyc}/review', [KycController::class, 'review'])->name('review');
+            // Route::post('/{kyc}/approve', [KycController::class, 'approve'])->name('approve');
+            // Route::post('/{kyc}/reject', [KycController::class, 'reject'])->name('reject');
         });
     });

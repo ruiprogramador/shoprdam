@@ -5,7 +5,10 @@ use Illuminate\Support\Facades\Route;
 use Inertia\Inertia;
 use Illuminate\Support\Facades\Auth;
 use App\Http\Controllers\User\ProfileController;
-use App\Http\Controllers\Vendor\KycController;
+use App\Http\Controllers\Vendor\KycController as VendorKycController;
+
+use App\Models\State;
+use App\Models\City;
 
 Route::get('/', function () {
     if (Auth::check()) {
@@ -58,14 +61,33 @@ Route::middleware(['auth:web', 'role:vendor'])->group(function () {
 
     // Vendor KYC Routes
     Route::prefix('vendor/kyc')->name('vendor.kyc.')->group(function () {
-        Route::get('/', [KYCController::class, 'index'])->name('index');
-        Route::get('/create', [KYCController::class, 'create'])->name('create');
-        Route::post('/', [KYCController::class, 'store'])->name('store');
-        Route::get('/edit', [KYCController::class, 'edit'])->name('edit');
-        Route::put('/', [KYCController::class, 'update'])->name('update');
+        /*Route::get('/', [VendorKycController::class, 'index'])->name('index');
+        Route::get('/', [VendorKycController::class, 'index'])->name('show');
+        Route::get('/create', [VendorKycController::class, 'create'])->name('create');
+        Route::post('/', [VendorKycController::class, 'store'])->name('store');
+        Route::get('/edit', [VendorKycController::class, 'edit'])->name('edit');
+        Route::put('/', [VendorKycController::class, 'update'])->name('update');*/
+
+        Route::get('/', [VendorKycController::class, 'show'])->name('show');
+        Route::get('/create', [VendorKycController::class, 'create'])->name('create');
+        Route::get('/edit', [VendorKycController::class, 'edit'])->name('edit');
+        Route::post('/', [VendorKycController::class, 'store'])->name('store');
+        Route::post('/update', [VendorKycController::class, 'update'])->name('update');
     });
 
 });
 
+/* Route::prefix('api')->name('api.')->group(function () {
+    Route::get('/states', fn () => State::forCountry((int)request('country_id'))->get(['id', 'name']))->name('states');
+    Route::get('/cities', fn () => City::forState((int)request('state_id'))->get(['id', 'name']))->name('cities');
+});  
+
+Route::get('/states', function () {
+    dd(request('country_id'));
+    return State::where('country_id', request('country_id'))
+        ->get(['id', 'name']);
+}); */
+
+require __DIR__ . '/api.php';
 require __DIR__ . '/auth.php';
 require __DIR__ . '/admin.php';
