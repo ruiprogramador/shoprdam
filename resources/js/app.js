@@ -1,3 +1,4 @@
+import './echo'
 import '../css/app.css'
 import '../css/navbar-vertical.css'
 import '../css/tabler/tabler.min.css'
@@ -30,6 +31,15 @@ import FilePondPluginImagePreview from 'filepond-plugin-image-preview/dist/filep
 |--------------------------------------------------------------------------
 */
 const appName = import.meta.env.VITE_APP_NAME || 'ShopRdam'
+
+/* console.log("Window Echo:");
+console.log(window.Echo);
+console.log("Window Pusher:");
+console.log(window.Pusher);
+
+console.log(window.Echo.connector.pusher.connection.socket);
+console.log(window.Echo.connector.pusher.connection.state);
+console.log(window.Echo.connector.pusher.config); */
 
 /*
 |--------------------------------------------------------------------------

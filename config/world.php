@@ -76,7 +76,10 @@ return [
 	|--------------------------------------------------------------------------
 	*/
 
-	'routes' => true,
+	#'routes' => false, # Set to false to disable package routes. You can then define your own routes and use the package's controllers.
+
+	#'routes' => true, # Set to true to enable package routes.
+	#'route_prefix' => 'world', # The prefix for all package routes.
 
 	/*
 	|--------------------------------------------------------------------------

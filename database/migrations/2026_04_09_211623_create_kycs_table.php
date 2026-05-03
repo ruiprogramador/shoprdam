@@ -15,7 +15,7 @@ return new class extends Migration
             $table->id();
             $table->foreignId('user_id')->constrained('users')->onDelete('cascade');
             $table->foreignId('kyc_status_id')->constrained('kyc_status')->restrictOnDelete();
-            $table->foreignId('reviewed_by')->nullable()->constrained('users')->nullOnDelete();
+            $table->foreignId('reviewed_by')->nullable()->constrained('admins')->nullOnDelete();
             $table->foreignId('country_id')->constrained('countries')->restrictOnDelete();
             $table->foreignId('state_id')->constrained('states')->restrictOnDelete();
             $table->foreignId('city_id')->constrained('cities')->restrictOnDelete();

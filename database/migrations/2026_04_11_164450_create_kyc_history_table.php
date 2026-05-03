@@ -14,7 +14,7 @@ return new class extends Migration
         Schema::create('kyc_history', function (Blueprint $table) {
             $table->id();
             $table->foreignId('kyc_id')->constrained('kycs')->onDelete('cascade');
-            $table->foreignId('reviewed_by')->nullable()->constrained('users')->nullOnDelete();
+            $table->foreignId('reviewed_by')->nullable()->constrained('admins')->nullOnDelete();
             $table->foreignId('from_status_id')->nullable()->constrained('kyc_status')->nullOnDelete();
             $table->foreignId('to_status_id')->constrained('kyc_status')->restrictOnDelete();
             $table->text('notes')->nullable();

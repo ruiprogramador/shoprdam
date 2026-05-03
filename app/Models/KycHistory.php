@@ -4,9 +4,15 @@ namespace App\Models;
 
 use Illuminate\Database\Eloquent\Model;
 use Illuminate\Database\Eloquent\Relations\BelongsTo;
+use App\Models\Kyc;
+use App\Models\Admin;
+use App\Models\KycStatus;
 
 class KycHistory extends Model
 {
+
+    protected $table = 'kyc_history';
+
     protected $fillable = [
         'kyc_id',
         'reviewed_by',
@@ -25,7 +31,7 @@ class KycHistory extends Model
 
     public function reviewer(): BelongsTo
     {
-        return $this->belongsTo(User::class, 'reviewed_by');
+        return $this->belongsTo(Admin::class, 'reviewed_by');
     }
 
     public function fromStatus(): BelongsTo
