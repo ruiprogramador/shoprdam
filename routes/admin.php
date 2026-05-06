@@ -11,6 +11,7 @@ use App\Http\Controllers\Admin\Auth\RegisteredUserController;
 use App\Http\Controllers\Admin\Auth\VerifyEmailController;
 use App\Http\Controllers\Admin\ProfileController;
 use App\Http\Controllers\Admin\KycController;
+use App\Http\Controllers\Admin\TranslationController;
 use Illuminate\Support\Facades\Route;
 use Inertia\Inertia;
 
@@ -88,5 +89,14 @@ Route::middleware('auth:admin')
             Route::post('/{kyc}/review', [KycController::class, 'review'])->name('review');
             // Route::post('/{kyc}/approve', [KycController::class, 'approve'])->name('approve');
             // Route::post('/{kyc}/reject', [KycController::class, 'reject'])->name('reject');
+        });
+
+        // Admin Translation Management Routes
+        Route::prefix('translations')->name('translations.')->group(function () {
+            Route::get('/', [TranslationController::class, 'index'])->name('index');
+            Route::get('/show', [TranslationController::class, 'show'])->name('show');
+            Route::post('/', [TranslationController::class, 'store'])->name('store');
+            Route::put('/{translation}', [TranslationController::class, 'update'])->name('update');
+            Route::delete('/{translation}', [TranslationController::class, 'destroy'])->name('destroy');
         });
     });
