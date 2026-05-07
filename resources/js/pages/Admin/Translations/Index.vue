@@ -1,12 +1,12 @@
 <script setup lang="ts">
-import { ref, computed } from 'vue'
+import { ref, watch } from 'vue'
 import { router, useForm, Link } from '@inertiajs/vue3'
 import axios from 'axios'
 import AuthenticatedLayout from '@/Layouts/AuthenticatedLayout.vue'
 import Modal from '@/Components/Modal.vue'
+import RichTextEditor from '@/Components/RichTextEditor.vue'
 import PrimaryButton from '@/Components/PrimaryButton.vue'
 import SecondaryButton from '@/Components/SecondaryButton.vue'
-import InputLabel from '@/Components/InputLabel.vue'
 import InputError from '@/Components/InputError.vue'
 import TextInput from '@/Components/TextInput.vue'
 import { useTranslation } from '@/Composables/useTranslation'
@@ -33,13 +33,11 @@ const props = defineProps<{
 }>()
 
 // ─── Filters ─────────────────────────────────────────────────────
-const search   = ref(props.filters?.filter?.search ?? '')
-const locale   = ref(props.filters?.filter?.locale ?? '')
-const group    = ref(props.filters?.filter?.group ?? '')
-const perPage  = ref(props.filters?.per_page ?? 25)
-const sort     = ref(props.filters?.sort ?? 'group')
-
-const { t, ts } = useTranslation()
+const search  = ref(props.filters?.filter?.search ?? '')
+const locale  = ref(props.filters?.filter?.locale ?? props.locales[0] ?? 'en')
+const group   = ref(props.filters?.filter?.group ?? '')
+const perPage = ref(props.filters?.per_page ?? 25)
+const sort    = ref(props.filters?.sort ?? 'group')
 
 let searchTimeout: ReturnType<typeof setTimeout>
 
@@ -55,13 +53,16 @@ const applyFilters = () => {
     }, { preserveState: true, replace: true })
 }
 
+const { t, ts } = useTranslation()
+
 const onSearchInput = () => {
     clearTimeout(searchTimeout)
     searchTimeout = setTimeout(applyFilters, 400)
 }
 
 const resetFilters = () => {
-    search.value = ''; locale.value = ''; group.value = ''
+    search.value = ''
+    group.value  = ''
     applyFilters()
 }
 
@@ -77,75 +78,81 @@ const sortIcon = (field: string) => {
 }
 
 // ─── Edit Modal ───────────────────────────────────────────────────
-const showEditModal   = ref(false)
+const showEditModal  = ref(false)
 const showCreateModal = ref(false)
-const editLoading     = ref(false)
-const activeLocale    = ref('en')
-const allLocaleData   = ref<Record<string, TranslationVariant>>({})
-const editRow         = ref<{ group: string; key: string } | null>(null)
-
-// Forms per locale — dynamically created
-const editForms = ref<Record<string, ReturnType<typeof useForm>>>({})
+const editLoading    = ref(false)
+const activeLocale   = ref(props.locales[0] ?? 'en')
+const allLocaleData  = ref<Record<string, TranslationVariant>>({})
+const editRow        = ref<{ group: string; key: string } | null>(null)
+const editForms      = ref<Record<string, ReturnType<typeof useForm>>>({})
 
 const openEdit = async (row: TranslationVariant) => {
-    editRow.value   = { group: row.group, key: row.key }
-    activeLocale.value = row.locale
-    editLoading.value  = true
+    editRow.value       = { group: row.group, key: row.key }
+    activeLocale.value  = row.locale
+    editLoading.value   = true
     showEditModal.value = true
+    allLocaleData.value = {}
+    editForms.value     = {} // reset
 
     try {
         const { data } = await axios.get(route('admin.translations.show'), {
             params: { group: row.group, key: row.key },
         })
 
+        console.log('=== RESPOSTA DO AXIOS ===', data)
+
         allLocaleData.value = data
 
-        // Create a form for each locale
-        editForms.value = {}
+        console.log('=== FORMS CRIADOS ===')
         for (const l of props.locales) {
             const t = data[l]
             editForms.value[l] = useForm({
                 text_short: t?.text_short ?? '',
-                text:       t?.text ?? '',
-                text_long:  t?.text_long ?? '',
-                text_html:  t?.text_html ?? '',
+                text:       t?.text       ?? '',
+                text_long:  t?.text_long  ?? '',
+                text_html:  t?.text_html  ?? '',
             })
+            console.log(`form[${l}].text_html:`, editForms.value[l]?.text_html)
         }
     } finally {
+        // Só aqui é que o loading termina — o v-if do RichTextEditor
+        // só se torna true DEPOIS dos forms estarem populados com conteúdo real
         editLoading.value = false
     }
 }
 
+// ─── Save locale ─────────────────────────────────────────────────
+// text_html is kept in sync automatically via v-model on RichTextEditor
+// No manual sync needed here
 const saveLocale = (l: string) => {
-    if (!editRow.value) return
+    if (!editRow.value || !editForms.value[l]) return
+
     const existing = allLocaleData.value[l]
-    const form = editForms.value[l]
 
     if (existing) {
-        form.patch(route('admin.translations.update', existing.id), {
+        editForms.value[l].patch(route('admin.translations.update', existing.id), {
             onSuccess: () => {
-                // Refresh locale data
+                showEditModal.value = false  // ← fecha a modal
                 allLocaleData.value[l] = {
                     ...existing,
-                    text_short: form.text_short,
-                    text:       form.text,
-                    text_long:  form.text_long,
-                    text_html:  form.text_html,
+                    ...editForms.value[l].data(),
                 }
             },
         })
     } else {
-        // Create for this locale
-        form.transform(data => ({
-            ...data,
-            locale: l,
-            group:  editRow.value!.group,
-            key:    editRow.value!.key,
-        })).post(route('admin.translations.store'), {
-            onSuccess: () => {
-                router.reload({ only: ['translations'] })
-            },
-        })
+        editForms.value[l]
+            .transform((data: any) => ({
+                ...data,
+                locale: l,
+                group:  editRow.value!.group,
+                key:    editRow.value!.key,
+            }))
+            .post(route('admin.translations.store'), {
+                onSuccess: () => {
+                    showEditModal.value = false
+                    router.reload({ only: ['translations'] })
+                },
+            })
     }
 }
 
@@ -154,14 +161,14 @@ const localeExists = (l: string) => !!allLocaleData.value[l]
 const localeTabClass = (l: string) => {
     const isActive = activeLocale.value === l
     const exists   = localeExists(l)
-    if (isActive) return 'border-b-2 border-indigo-500 text-indigo-700 font-semibold'
+    if (isActive) return 'border-b-2 border-indigo-500 text-indigo-700 font-semibold bg-indigo-50/50'
     if (!exists)  return 'text-gray-300 hover:text-gray-500'
-    return 'text-gray-500 hover:text-gray-700'
+    return 'text-gray-500 hover:text-gray-700 hover:bg-gray-50'
 }
 
 // ─── Create Modal ────────────────────────────────────────────────
 const createForm = useForm({
-    locale:     'en',
+    locale:     props.locales[0] ?? 'en',
     group:      '',
     key:        '',
     text_short: '',
@@ -172,9 +179,13 @@ const createForm = useForm({
 
 const submitCreate = () => {
     createForm.post(route('admin.translations.store'), {
-        onSuccess: () => {
+        /*onSuccess: () => {
             showCreateModal.value = false
             createForm.reset()
+        },*/
+        onSuccess: () => {
+            showCreateModal.value = false  // ← fecha a modal
+            router.reload({ only: ['translations'] })
         },
     })
 }
@@ -183,16 +194,14 @@ const submitCreate = () => {
 const deleteTranslation = (translation: TranslationVariant, e: Event) => {
     e.stopPropagation()
     if (!confirm(`Delete "${translation.group}.${translation.key}" (${translation.locale.toUpperCase()})?`)) return
-    router.delete(route('admin.translations.destroy', translation.id), {
-        preserveState: true,
-    })
+    router.delete(route('admin.translations.destroy', translation.id), { preserveState: true })
 }
 
 // ─── Helpers ─────────────────────────────────────────────────────
-const truncate = (str: string | null, len = 50) =>
+const truncate = (str: string | null, len = 55) =>
     str ? (str.length > len ? str.slice(0, len) + '...' : str) : null
 
-const localeColor = (l: string): string => {
+const localeColor = (l: string) => {
     const map: Record<string, string> = {
         en: 'bg-blue-100 text-blue-700',
         pt: 'bg-green-100 text-green-700',
@@ -206,60 +215,67 @@ const localeColor = (l: string): string => {
         <template #header>
             <div class="flex items-center justify-between">
                 <div>
-                    <h2 class="text-xl font-semibold text-gray-800">{{ t('admin.translations.title') ?? 'Translations' }}</h2>
+                    <h2 class="text-xl font-semibold text-gray-800">Translations {{t('common.back')}}</h2>
                     <p class="text-xs text-gray-400 mt-0.5">{{ translations.meta?.total ?? 0 }} entries</p>
                 </div>
-                <PrimaryButton @click="showCreateModal = true">+ Add</PrimaryButton>
+                <PrimaryButton @click="showCreateModal = true">+ Add Translation</PrimaryButton>
             </div>
         </template>
 
         <div class="py-6 px-4 max-w-7xl mx-auto space-y-4">
 
             <!-- Filters -->
-            <div class="bg-white rounded-xl border border-gray-200 p-4 space-y-3">
+            <div class="bg-white rounded-xl border border-gray-200 p-4">
                 <div class="flex flex-wrap gap-3 items-center">
+
+                    <!-- Locale tabs -->
+                    <div class="flex gap-1 bg-gray-100 rounded-lg p-1 shrink-0">
+                        <button
+                            v-for="l in locales"
+                            :key="l"
+                            type="button"
+                            @click="locale = l; applyFilters()"
+                            class="px-4 py-1.5 rounded-md text-sm font-medium transition-all"
+                            :class="locale === l
+                                ? 'bg-white shadow text-gray-800'
+                                : 'text-gray-500 hover:text-gray-700'"
+                        >
+                            {{ l.toUpperCase() }}
+                        </button>
+                    </div>
+
+                    <!-- Group -->
+                    <select
+                        v-model="group"
+                        @change="applyFilters"
+                        class="rounded-lg border-gray-300 text-sm shadow-sm focus:border-indigo-500 focus:ring-indigo-500 py-2 px-3"
+                    >
+                        <option value="">All groups</option>
+                        <option v-for="g in groups" :key="g" :value="g">{{ g }}</option>
+                    </select>
+
                     <!-- Search -->
                     <input
                         v-model="search"
                         @input="onSearchInput"
                         type="text"
                         placeholder="Search key or value..."
-                        class="flex-1 min-w-48 rounded-lg border-gray-300 text-sm shadow-sm focus:border-indigo-500 focus:ring-indigo-500"
+                        class="flex-1 min-w-48 rounded-lg border-gray-300 text-sm shadow-sm focus:border-indigo-500 focus:ring-indigo-500 py-2 px-3"
                     />
-
-                    <!-- Locale -->
-                    <select
-                        v-model="locale"
-                        @change="applyFilters"
-                        class="rounded-lg border-gray-300 text-sm shadow-sm"
-                    >
-                        <option value="">All locales</option>
-                        <option v-for="l in locales" :key="l" :value="l">{{ l.toUpperCase() }}</option>
-                    </select>
-
-                    <!-- Group -->
-                    <select
-                        v-model="group"
-                        @change="applyFilters"
-                        class="rounded-lg border-gray-300 text-sm shadow-sm"
-                    >
-                        <option value="">All groups</option>
-                        <option v-for="g in groups" :key="g" :value="g">{{ g }}</option>
-                    </select>
 
                     <!-- Per page -->
                     <select
                         v-model="perPage"
                         @change="applyFilters"
-                        class="rounded-lg border-gray-300 text-sm shadow-sm"
+                        class="rounded-lg border-gray-300 text-sm shadow-sm py-2 px-3"
                     >
-                        <option :value="25">25</option>
-                        <option :value="50">50</option>
-                        <option :value="100">100</option>
+                        <option :value="25">25 / page</option>
+                        <option :value="50">50 / page</option>
+                        <option :value="100">100 / page</option>
                     </select>
 
                     <button
-                        v-if="search || locale || group"
+                        v-if="search || group"
                         @click="resetFilters"
                         class="text-xs text-gray-400 hover:text-gray-600 underline"
                     >
@@ -275,13 +291,13 @@ const localeColor = (l: string): string => {
                         <tr>
                             <th class="px-4 py-3 text-left font-medium w-16">Locale</th>
                             <th
-                                class="px-4 py-3 text-left font-medium w-28 cursor-pointer hover:text-gray-600"
+                                class="px-4 py-3 text-left font-medium w-28 cursor-pointer hover:text-gray-600 select-none"
                                 @click="toggleSort('group')"
                             >
                                 Group {{ sortIcon('group') }}
                             </th>
                             <th
-                                class="px-4 py-3 text-left font-medium w-56 cursor-pointer hover:text-gray-600"
+                                class="px-4 py-3 text-left font-medium w-56 cursor-pointer hover:text-gray-600 select-none"
                                 @click="toggleSort('key')"
                             >
                                 Key {{ sortIcon('key') }}
@@ -289,19 +305,19 @@ const localeColor = (l: string): string => {
                             <th class="px-4 py-3 text-left font-medium w-28">Short</th>
                             <th class="px-4 py-3 text-left font-medium">Text</th>
                             <th
-                                class="px-4 py-3 text-left font-medium w-28 cursor-pointer hover:text-gray-600"
+                                class="px-4 py-3 text-left font-medium w-28 cursor-pointer hover:text-gray-600 select-none"
                                 @click="toggleSort('updated_at')"
                             >
                                 Updated {{ sortIcon('updated_at') }}
                             </th>
-                            <th class="px-4 py-3 w-16"></th>
+                            <th class="px-4 py-3 w-20"></th>
                         </tr>
                     </thead>
                     <tbody class="divide-y divide-gray-50">
                         <tr
                             v-for="translation in translations.data"
                             :key="translation.id"
-                            class="hover:bg-indigo-50/40 transition-colors cursor-pointer group"
+                            class="hover:bg-indigo-50/30 transition-colors cursor-pointer"
                             @click="openEdit(translation)"
                         >
                             <td class="px-4 py-2.5">
@@ -316,20 +332,12 @@ const localeColor = (l: string): string => {
                             <td class="px-4 py-2.5 font-mono text-xs text-gray-700 font-medium">{{ translation.key }}</td>
                             <td class="px-4 py-2.5 text-xs text-gray-500">{{ translation.text_short ?? '—' }}</td>
                             <td class="px-4 py-2.5 text-gray-700">
-                                <span
-                                    v-if="translation.text"
-                                    class="text-sm"
-                                >
-                                    {{ truncate(translation.text) }}
-                                </span>
+                                <span v-if="translation.text" class="text-sm">{{ truncate(translation.text) }}</span>
                                 <span v-else class="text-xs text-gray-300 italic">empty</span>
                             </td>
-                            <td class="px-4 py-2.5 text-xs text-gray-400">
-                                {{ translation.updater?.name ?? '—' }}
-                            </td>
+                            <td class="px-4 py-2.5 text-xs text-gray-400">{{ translation.updater?.name ?? '—' }}</td>
                             <td class="px-4 py-2.5" @click.stop>
                                 <div class="flex items-center justify-end gap-1">
-                                    <!-- Edit icon -->
                                     <button
                                         @click="openEdit(translation)"
                                         class="p-1.5 text-gray-400 hover:text-indigo-600 hover:bg-indigo-50 rounded-md transition-colors"
@@ -340,7 +348,6 @@ const localeColor = (l: string): string => {
                                             <path d="M3.5 5.75c0-.69.56-1.25 1.25-1.25H10A.75.75 0 0010 3H4.75A2.75 2.75 0 002 5.75v9.5A2.75 2.75 0 004.75 18h9.5A2.75 2.75 0 0017 15.25V10a.75.75 0 00-1.5 0v5.25c0 .69-.56 1.25-1.25 1.25h-9.5c-.69 0-1.25-.56-1.25-1.25v-9.5z"/>
                                         </svg>
                                     </button>
-                                    <!-- Delete icon -->
                                     <button
                                         @click="deleteTranslation(translation, $event)"
                                         class="p-1.5 text-gray-400 hover:text-red-600 hover:bg-red-50 rounded-md transition-colors"
@@ -368,19 +375,25 @@ const localeColor = (l: string): string => {
                 >
                     <p>Page {{ translations.meta.current_page }} of {{ translations.meta.last_page }} ({{ translations.meta.total }} entries)</p>
                     <div class="flex gap-2">
-                        <Link v-if="translations.links?.prev" :href="translations.links.prev" class="px-3 py-1 border border-gray-300 rounded hover:bg-gray-50">← Prev</Link>
-                        <Link v-if="translations.links?.next" :href="translations.links.next" class="px-3 py-1 border border-gray-300 rounded hover:bg-gray-50">Next →</Link>
+                        <Link
+                            v-if="translations.links?.prev"
+                            :href="translations.links.prev"
+                            class="px-3 py-1 border border-gray-300 rounded hover:bg-gray-50"
+                        >← Prev</Link>
+                        <Link
+                            v-if="translations.links?.next"
+                            :href="translations.links.next"
+                            class="px-3 py-1 border border-gray-300 rounded hover:bg-gray-50"
+                        >Next →</Link>
                     </div>
                 </div>
             </div>
         </div>
 
-        <!-- Edit Modal — with locale tabs -->
+        <!-- ── Edit Modal ── -->
         <Modal :show="showEditModal" @close="showEditModal = false" max-width="2xl">
             <div class="p-6">
-
-                <!-- Header -->
-                <div class="mb-4">
+                <div class="mb-5">
                     <h3 class="text-lg font-semibold text-gray-800">Edit Translation</h3>
                     <p class="text-xs font-mono text-gray-400 mt-0.5" v-if="editRow">
                         {{ editRow.group }}.{{ editRow.key }}
@@ -393,32 +406,37 @@ const localeColor = (l: string): string => {
                         <circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4"/>
                         <path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8v8H4z"/>
                     </svg>
-                    Loading...
+                    Loading translations...
                 </div>
 
                 <template v-else>
                     <!-- Locale tabs -->
-                    <div class="flex gap-1 border-b border-gray-200 mb-5">
+                    <div class="flex border-b border-gray-200 mb-6">
                         <button
                             v-for="l in locales"
                             :key="l"
                             type="button"
                             @click="activeLocale = l"
-                            class="px-4 py-2 text-sm transition-colors relative"
+                            class="flex items-center gap-2 px-5 py-2.5 text-sm transition-colors"
                             :class="localeTabClass(l)"
                         >
-                            {{ l.toUpperCase() }}
-                            <!-- Dot indicator if translation exists -->
                             <span
-                                class="ml-1.5 inline-block w-1.5 h-1.5 rounded-full"
+                                class="inline-flex items-center px-2 py-0.5 rounded text-xs font-bold"
+                                :class="localeColor(l)"
+                            >
+                                {{ l.toUpperCase() }}
+                            </span>
+                            <span
+                                class="w-2 h-2 rounded-full"
                                 :class="localeExists(l) ? 'bg-green-400' : 'bg-gray-200'"
+                                :title="localeExists(l) ? 'Translation exists' : 'Not yet translated'"
                             />
                         </button>
                     </div>
 
-                    <!-- Form per locale -->
+                    <!-- One form per locale — v-if ensures editor is destroyed/recreated on tab switch -->
                     <template v-for="l in locales" :key="l">
-                        <div v-if="activeLocale === l && editForms[l]" class="space-y-4">
+                        <div v-if="activeLocale === l && editForms[l]" class="space-y-5">
 
                             <!-- Not yet translated notice -->
                             <div
@@ -429,58 +447,71 @@ const localeColor = (l: string): string => {
                                 This translation doesn't exist for <strong>{{ l.toUpperCase() }}</strong> yet. Fill in the fields and save to create it.
                             </div>
 
+                            <!-- Short text -->
                             <div>
-                                <InputLabel value="Short text" />
-                                <p class="text-xs text-gray-400 mb-1">Badges, pills, table cells</p>
-                                <TextInput v-model="editForms[l].text_short" class="mt-1 w-full" placeholder="e.g. Pending" />
+                                <label class="block text-sm font-medium text-gray-700 mb-1">
+                                    Short text
+                                    <span class="text-xs text-gray-400 font-normal ml-1">— badges, pills, table cells</span>
+                                </label>
+                                <TextInput v-model="editForms[l].text_short" class="w-full" placeholder="e.g. Pending" />
                                 <InputError :message="editForms[l].errors.text_short" />
                             </div>
 
+                            <!-- Text -->
                             <div>
-                                <InputLabel value="Text" />
-                                <p class="text-xs text-gray-400 mb-1">Messages, toasts, labels</p>
+                                <label class="block text-sm font-medium text-gray-700 mb-1">
+                                    Text <span class="text-red-500">*</span>
+                                    <span class="text-xs text-gray-400 font-normal ml-1">— messages, toasts, labels</span>
+                                </label>
                                 <textarea
                                     v-model="editForms[l].text"
                                     rows="2"
-                                    class="mt-1 w-full rounded-lg border-gray-300 text-sm shadow-sm focus:border-indigo-500 focus:ring-indigo-500"
+                                    class="w-full rounded-lg border-gray-300 text-sm shadow-sm focus:border-indigo-500 focus:ring-indigo-500"
                                     placeholder="e.g. Your KYC is pending review"
                                 />
                                 <InputError :message="editForms[l].errors.text" />
                             </div>
 
+                            <!-- Long text -->
                             <div>
-                                <InputLabel value="Long text" />
-                                <p class="text-xs text-gray-400 mb-1">Descriptions, warnings</p>
+                                <label class="block text-sm font-medium text-gray-700 mb-1">
+                                    Long text
+                                    <span class="text-xs text-gray-400 font-normal ml-1">— descriptions, warnings</span>
+                                </label>
                                 <textarea
                                     v-model="editForms[l].text_long"
                                     rows="3"
-                                    class="mt-1 w-full rounded-lg border-gray-300 text-sm shadow-sm focus:border-indigo-500 focus:ring-indigo-500"
+                                    class="w-full rounded-lg border-gray-300 text-sm shadow-sm focus:border-indigo-500 focus:ring-indigo-500"
                                 />
                                 <InputError :message="editForms[l].errors.text_long" />
                             </div>
 
+                            <!-- Rich text — RichTextEditor with v-model -->
+                            <!-- v-if on the parent ensures editor is recreated when switching locales -->
                             <div>
-                                <InputLabel value="HTML text" />
-                                <p class="text-xs text-gray-400 mb-1">Rich HTML emails</p>
-                                <textarea
-                                    v-model="editForms[l].text_html"
-                                    rows="3"
-                                    class="mt-1 w-full rounded-lg border-gray-300 text-sm font-mono shadow-sm focus:border-indigo-500 focus:ring-indigo-500"
-                                    placeholder="<p>Your KYC has been <strong>approved</strong>.</p>"
-                                />
+                                <label class="block text-sm font-medium text-gray-700 mb-1">
+                                    Rich text
+                                    <span class="text-xs text-gray-400 font-normal ml-1">— HTML emails</span>
+                                </label>
+                                <RichTextEditor v-model="editForms[l].text_html" />
                                 <InputError :message="editForms[l].errors.text_html" />
                             </div>
 
                             <!-- Audit -->
-                            <div class="text-xs text-gray-400 flex gap-4 pt-1" v-if="allLocaleData[l]">
+                            <div
+                                v-if="allLocaleData[l]"
+                                class="text-xs text-gray-400 flex gap-4 pt-1 border-t border-gray-100"
+                            >
                                 <span v-if="allLocaleData[l].creator">Created by {{ allLocaleData[l].creator?.name }}</span>
                                 <span v-if="allLocaleData[l].updater">Updated by {{ allLocaleData[l].updater?.name }}</span>
                             </div>
 
-                            <div class="flex justify-end gap-3 pt-2 border-t border-gray-100">
+                            <div class="flex justify-end gap-3">
                                 <SecondaryButton type="button" @click="showEditModal = false">Close</SecondaryButton>
                                 <PrimaryButton @click="saveLocale(l)" :disabled="editForms[l].processing">
-                                    {{ editForms[l].processing ? 'Saving...' : localeExists(l) ? 'Save changes' : 'Create translation' }}
+                                    {{ editForms[l].processing
+                                        ? 'Saving...'
+                                        : localeExists(l) ? 'Save changes' : 'Create translation' }}
                                 </PrimaryButton>
                             </div>
                         </div>
@@ -489,52 +520,91 @@ const localeColor = (l: string): string => {
             </div>
         </Modal>
 
-        <!-- Create Modal -->
+        <!-- ── Create Modal ── -->
         <Modal :show="showCreateModal" @close="showCreateModal = false" max-width="2xl">
-            <div class="p-6 space-y-4">
+            <div class="p-6 space-y-5">
                 <h3 class="text-lg font-semibold text-gray-800">Add Translation</h3>
 
-                <div class="grid grid-cols-3 gap-3">
-                    <div>
-                        <InputLabel value="Locale" />
-                        <select v-model="createForm.locale" class="mt-1 w-full rounded-lg border-gray-300 text-sm shadow-sm">
+                <div class="grid grid-cols-12 gap-3">
+                    <div class="col-span-4">
+                        <label class="block text-sm font-medium text-gray-700 mb-1">
+                            Locale <span class="text-red-500">*</span>
+                        </label>
+                        <select
+                            v-model="createForm.locale"
+                            class="w-full rounded-lg border border-gray-300 text-sm py-2.5 px-3 focus:border-indigo-500 focus:ring-1 focus:ring-indigo-500 bg-white"
+                        >
                             <option v-for="l in locales" :key="l" :value="l">{{ l.toUpperCase() }}</option>
                         </select>
                         <InputError :message="createForm.errors.locale" />
                     </div>
-                    <div>
-                        <InputLabel value="Group" />
-                        <TextInput v-model="createForm.group" class="mt-1 w-full" placeholder="e.g. kyc" list="groups-list" />
+                    <div class="col-span-4">
+                        <label class="block text-sm font-medium text-gray-700 mb-1">
+                            Group <span class="text-red-500">*</span>
+                        </label>
+                        <input
+                            v-model="createForm.group"
+                            list="groups-list"
+                            class="w-full rounded-lg border border-gray-300 text-sm py-2.5 px-3 focus:border-indigo-500 focus:ring-1 focus:ring-indigo-500"
+                            placeholder="e.g. kyc"
+                        />
                         <datalist id="groups-list">
                             <option v-for="g in groups" :key="g" :value="g" />
                         </datalist>
                         <InputError :message="createForm.errors.group" />
                     </div>
-                    <div>
-                        <InputLabel value="Key" />
-                        <TextInput v-model="createForm.key" class="mt-1 w-full" placeholder="e.g. submitted" />
+                    <div class="col-span-4">
+                        <label class="block text-sm font-medium text-gray-700 mb-1">
+                            Key <span class="text-red-500">*</span>
+                        </label>
+                        <input
+                            v-model="createForm.key"
+                            class="w-full rounded-lg border border-gray-300 text-sm py-2.5 px-3 focus:border-indigo-500 focus:ring-1 focus:ring-indigo-500"
+                            placeholder="e.g. submitted"
+                        />
                         <InputError :message="createForm.errors.key" />
                     </div>
                 </div>
 
                 <div>
-                    <InputLabel value="Short text" />
-                    <TextInput v-model="createForm.text_short" class="mt-1 w-full" placeholder="e.g. Pending" />
+                    <label class="block text-sm font-medium text-gray-700 mb-1">Short text</label>
+                    <TextInput v-model="createForm.text_short" class="w-full" placeholder="e.g. Pending" />
                     <InputError :message="createForm.errors.text_short" />
                 </div>
+
                 <div>
-                    <InputLabel value="Text" />
-                    <textarea v-model="createForm.text" rows="2" class="mt-1 w-full rounded-lg border-gray-300 text-sm shadow-sm focus:border-indigo-500 focus:ring-indigo-500" />
+                    <label class="block text-sm font-medium text-gray-700 mb-1">
+                        Text <span class="text-red-500">*</span>
+                        <span class="text-xs text-gray-400 font-normal ml-1">— messages, toasts, labels</span>
+                    </label>
+                    <textarea
+                        v-model="createForm.text"
+                        rows="2"
+                        class="w-full rounded-lg border-gray-300 text-sm shadow-sm focus:border-indigo-500 focus:ring-indigo-500"
+                        placeholder="e.g. Your KYC is pending review"
+                    />
                     <InputError :message="createForm.errors.text" />
                 </div>
+
                 <div>
-                    <InputLabel value="Long text (optional)" />
-                    <textarea v-model="createForm.text_long" rows="2" class="mt-1 w-full rounded-lg border-gray-300 text-sm shadow-sm focus:border-indigo-500 focus:ring-indigo-500" />
+                    <label class="block text-sm font-medium text-gray-700 mb-1">
+                        Long text
+                        <span class="text-xs text-gray-400 font-normal ml-1">— descriptions</span>
+                    </label>
+                    <textarea
+                        v-model="createForm.text_long"
+                        rows="2"
+                        class="w-full rounded-lg border-gray-300 text-sm shadow-sm focus:border-indigo-500 focus:ring-indigo-500"
+                    />
                     <InputError :message="createForm.errors.text_long" />
                 </div>
+
                 <div>
-                    <InputLabel value="HTML text (optional)" />
-                    <textarea v-model="createForm.text_html" rows="2" class="mt-1 w-full rounded-lg border-gray-300 text-sm font-mono shadow-sm focus:border-indigo-500 focus:ring-indigo-500" />
+                    <label class="block text-sm font-medium text-gray-700 mb-2">
+                        Rich text
+                        <span class="text-xs text-gray-400 font-normal ml-1">— HTML emails</span>
+                    </label>
+                    <RichTextEditor v-model="createForm.text_html" />
                     <InputError :message="createForm.errors.text_html" />
                 </div>
 
