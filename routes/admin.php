@@ -96,7 +96,7 @@ Route::middleware('auth:admin')
             Route::get('/', [TranslationController::class, 'index'])->name('index');
             Route::get('/show', [TranslationController::class, 'show'])->name('show');
             Route::post('/', [TranslationController::class, 'store'])->name('store');
-            Route::put('/{translation}', [TranslationController::class, 'update'])->name('update');
+            Route::match(['put', 'patch'],'/{translation}', [TranslationController::class, 'update'])->name('update');
             Route::delete('/{translation}', [TranslationController::class, 'destroy'])->name('destroy');
         });
     });
