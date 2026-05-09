@@ -105,7 +105,11 @@ class TranslationController extends Controller
 
         $this->clearCache($request->locale, $request->group);
 
-        return back()->with('success', 'Translation created successfully.');
+        if ($request->boolean('is_last')) {
+            return back()->with('success', 'Translation saved successfully.');
+        }
+
+        return back(); // ← sem flash nos intermédios
     }
 
     /**
@@ -113,6 +117,7 @@ class TranslationController extends Controller
      */
     public function update(Request $request, Translation $translation): RedirectResponse
     {
+        // dd("Não está chegando aqui", $request->all(), $translation);
         $request->validate([
             'text_short' => ['nullable', 'string'],
             'text'       => ['required', 'string'],
@@ -130,7 +135,11 @@ class TranslationController extends Controller
 
         $this->clearCache($translation->locale, $translation->group);
 
-        return back()->with('success', 'Translation updated successfully.');
+        if ($request->boolean('is_last')) {
+            return back()->with('success', 'Translation saved successfully.');
+        }
+
+        return back(); // ← sem flash nos intermédios
     }
 
     /**
@@ -150,5 +159,6 @@ class TranslationController extends Controller
     {
         Cache::forget("translations.{$locale}.{$group}");
         Cache::forget("translations.{$locale}");
+        Cache::forget("translations.full.{$locale}");
     }
 }

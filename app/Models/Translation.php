@@ -75,7 +75,7 @@ class Translation extends Model
      */
     public static function getFullForLocale(string $locale): array
     {
-        return static::forLocale($locale)
+        /* return static::forLocale($locale)
             ->get(['group', 'key', 'text_short', 'text', 'text_long'])
             ->groupBy('group')
             ->map(fn ($items) =>
@@ -85,6 +85,23 @@ class Translation extends Model
                     'long'  => $item->text_long,
                 ])
             )
+            ->toArray(); */
+
+        return self::query()
+            ->where('locale', $locale)
+            ->get()
+            ->groupBy('group')
+            ->map(function ($groupItems) {
+                return $groupItems->mapWithKeys(function ($item) {
+                    return [
+                        $item->key => [
+                            'short' => $item->text_short,
+                            'text'  => $item->text,
+                            'long'  => $item->text_long,
+                        ]
+                    ];
+                });
+            })
             ->toArray();
     }
 

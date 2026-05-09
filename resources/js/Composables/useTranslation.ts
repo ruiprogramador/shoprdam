@@ -23,8 +23,12 @@ interface TranslationItem {
 export function useTranslation() {
     const page = usePage()
 
-    const translations = computed(() =>
+    /* const translations = computed(() =>
         (page.props.translations as Record<string, Record<string, TranslationItem>>) ?? {}
+    ) */
+
+    const translations = computed(() =>
+        (page.props.sharedTranslations as Record<string, Record<string, TranslationItem>>) ?? {}
     )
 
     const locale = computed(() =>
@@ -36,6 +40,7 @@ export function useTranslation() {
         const itemKey = rest.join('.')
 
         const item = translations.value[group]?.[itemKey]
+        console.log(translations)
 
         if (!item) return key // fallback to key if not found
 

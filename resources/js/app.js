@@ -9,8 +9,8 @@ import '@fortawesome/fontawesome-free/css/all.min.css'
 import 'filepond/dist/filepond.min.css'
 import 'filepond-plugin-image-preview/dist/filepond-plugin-image-preview.min.css'
 
-import { createApp, h, watch } from 'vue'
-import { createInertiaApp } from '@inertiajs/vue3'
+import { createApp, h } from 'vue'
+import { createInertiaApp, router } from '@inertiajs/vue3'
 import { resolvePageComponent } from 'laravel-vite-plugin/inertia-helpers'
 import { ZiggyVue } from '../../vendor/tightenco/ziggy'
 
@@ -21,54 +21,14 @@ import Toast, { useToast } from 'vue-toastification'
 import 'vue-toastification/dist/index.css'
 
 import vueFilePond from 'vue-filepond'
+import FilePondPluginFileValidateType from 'filepond-plugin-file-validate-type/dist/filepond-plugin-file-validate-type.esm.js'
+import FilePondPluginImagePreview from 'filepond-plugin-image-preview/dist/filepond-plugin-image-preview.esm.js'
 
-import FilePondPluginFileValidateType from 'filepond-plugin-file-validate-type/dist/filepond-plugin-file-validate-type.esm.js';
-import FilePondPluginImagePreview from 'filepond-plugin-image-preview/dist/filepond-plugin-image-preview.esm.js';
-
-/*
-|--------------------------------------------------------------------------
-| App Name
-|--------------------------------------------------------------------------
-*/
 const appName = import.meta.env.VITE_APP_NAME || 'ShopRdam'
 
-/* console.log("Window Echo:");
-console.log(window.Echo);
-console.log("Window Pusher:");
-console.log(window.Pusher);
-
-console.log(window.Echo.connector.pusher.connection.socket);
-console.log(window.Echo.connector.pusher.connection.state);
-console.log(window.Echo.connector.pusher.config); */
-
-/*
-|--------------------------------------------------------------------------
-| Create Pinia Instance
-|--------------------------------------------------------------------------
-*/
 const pinia = createPinia()
 pinia.use(piniaPluginPersistedstate)
 
-import { router } from '@inertiajs/vue3'
-
-const toast = useToast()
-
-router.on('success', (event) => {
-    const flash = event.detail.page.props.flash
-
-    if (!flash) return
-
-    if (flash.success) toast.success(flash.success)
-    if (flash.error) toast.error(flash.error)
-    if (flash.info) toast.info(flash.info)
-    if (flash.warning) toast.warning(flash.warning)
-})
-
-/*
-|--------------------------------------------------------------------------
-| Create Inertia App
-|--------------------------------------------------------------------------
-*/
 createInertiaApp({
     title: (title) => `${title} - ${appName}`,
 
@@ -81,14 +41,8 @@ createInertiaApp({
     setup({ el, App, props, plugin }) {
         const vueApp = createApp({ render: () => h(App, props) })
 
-        // Create FilePond component - https://pqina.nl/filepond/docs/getting-started/installation/vue/
-        const FilePond = vueFilePond(FilePondPluginFileValidateType, FilePondPluginImagePreview);
+        const FilePond = vueFilePond(FilePondPluginFileValidateType, FilePondPluginImagePreview)
 
-        /*
-        |--------------------------------------------------------------------------
-        | Register Plugins
-        |--------------------------------------------------------------------------
-        */
         vueApp
             .use(plugin)
             .use(ZiggyVue)
@@ -101,33 +55,23 @@ createInertiaApp({
                 draggable: true,
             })
 
-        /*
-        |--------------------------------------------------------------------------
-        | Global Flash → Toast Integration
-        |--------------------------------------------------------------------------
-        */
-
-        watch(
-            () => props.initialPage.props?.flash,
-            (flash) => {
-                if (!flash) return
-
-                if (flash.success) toast.success(flash.success)
-                if (flash.error) toast.error(flash.error)
-                if (flash.info) toast.info(flash.info)
-                if (flash.warning) toast.warning(flash.warning)
-            },
-            { immediate: true }
-        )
-
         vueApp.component('FilePond', FilePond)
-
-        /*
-        |--------------------------------------------------------------------------
-        | Mount App
-        |--------------------------------------------------------------------------
-        */
         vueApp.mount(el)
+
+        // ─── Global Flash → Toast ─────────────────────────────────────
+        // Register AFTER mount so useToast() has access to the Toast plugin instance.
+        // Using router.on('success') as the single source of truth — covers all
+        // Inertia requests (navigation, form submits, reloads).
+        const toast = useToast()
+
+        router.on('success', (event) => {
+            const flash = event.detail.page.props.flash
+            if (!flash) return
+            if (flash.success) toast.success(flash.success)
+            if (flash.error)   toast.error(flash.error)
+            if (flash.info)    toast.info(flash.info)
+            if (flash.warning) toast.warning(flash.warning)
+        })
     },
 
     progress: {

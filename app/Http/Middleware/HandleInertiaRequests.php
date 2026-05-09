@@ -48,7 +48,12 @@ class HandleInertiaRequests extends Middleware
             ],
             'breadcrumbs'  => $breadcrumbs,
             'locale'       => $locale,
-            'translations' => fn () => Cache::remember(
+            /* 'translations' => fn () => Cache::remember(
+                "translations.full.{$locale}",
+                now()->addHour(),
+                fn () => Translation::getFullForLocale($locale)
+            ), */
+            'sharedTranslations' => fn () => Cache::remember(
                 "translations.full.{$locale}",
                 now()->addHour(),
                 fn () => Translation::getFullForLocale($locale)
