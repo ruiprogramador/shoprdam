@@ -93,10 +93,13 @@ Route::middleware('auth:admin')
 
         // Admin Translation Management Routes
         Route::prefix('translations')->name('translations.')->group(function () {
-            Route::get('/', [TranslationController::class, 'index'])->name('index');
+            Route::get('/',     [TranslationController::class, 'index'])->name('index');
             Route::get('/show', [TranslationController::class, 'show'])->name('show');
-            Route::post('/', [TranslationController::class, 'store'])->name('store');
-            Route::match(['put', 'patch'],'/{translation}', [TranslationController::class, 'update'])->name('update');
+            Route::post('/',    [TranslationController::class, 'store'])->name('store');
             Route::delete('/{translation}', [TranslationController::class, 'destroy'])->name('destroy');
+        });
+
+        Route::prefix('translation-values')->name('translations.')->group(function () {
+            Route::match(['put', 'patch'], '/{translationValue}', [TranslationController::class, 'update'])->name('update');
         });
     });

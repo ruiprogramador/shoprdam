@@ -19,35 +19,24 @@ class TranslationController extends Controller
 {
     public function index(Request $request): Response
     {
-        $locale = $request->input('filter.locale',
-            auth('admin')->user()->locale ?? 'en'
-        );
-
         $translations = QueryBuilder::for(Translation::class)
-            ->with(['values' => fn ($q) => $q->where('locale', $locale)])
+            ->with(['values.updater'])   // todas as locales, sem filtro
             ->allowedFilters(
-                // Filtra pela locale através da relação values
-                AllowedFilter::callback('locale', fn ($query, $value) =>
-                    $query->whereHas('values', fn ($q) => $q->where('locale', $value))
-                ),
-                // Filtra pelo group (prefixo da key)
                 AllowedFilter::callback('group', fn ($query, $value) =>
                     $query->where('key', 'like', "{$value}.%")
                 ),
                 AllowedFilter::callback('search', fn ($query, $value) =>
                     $query->where(fn ($q) =>
                         $q->where('key', 'like', "%{$value}%")
-                          ->orWhere('label', 'like', "%{$value}%")
-                          ->orWhereHas('values', fn ($q2) =>
-                              $q2->where('value_short', 'like', "%{$value}%")
-                                 ->orWhere('value', 'like', "%{$value}%")
-                          )
+                        ->orWhere('label', 'like', "%{$value}%")
+                        ->orWhereHas('values', fn ($q2) =>
+                            $q2->where('value', 'like', "%{$value}%")
+                        )
                     )
                 ),
             )
             ->allowedSorts(
                 AllowedSort::field('key'),
-                AllowedSort::field('label'),
                 AllowedSort::field('updated_at'),
             )
             ->defaultSort('key')
@@ -169,29 +158,21 @@ class TranslationController extends Controller
     /**
      * Apaga um TranslationValue (e o Translation pai se ficar sem valores).
      */
-    public function destroy(TranslationValue $translationValue): RedirectResponse
+    public function destroy(Translation $translation): RedirectResponse
     {
-        $translation = $translationValue->translation;
-
-        $this->clearCache($translationValue->locale, $translation->key);
-
-        $translationValue->delete();
-
-        // Apaga o pai se já não tiver nenhum valor
-        if ($translation->values()->doesntExist()) {
-            $translation->delete();
-        }
+        $this->clearCache($translation);
+        $translation->delete(); // os values apagam-se em cascade (migration)
 
         return back()->with('success', 'Translation deleted successfully.');
     }
 
-    private function clearCache(string $locale, string $key): void
+    private function clearCache(Translation $translation): void
     {
-        // Extrai o group do prefixo da key (ex: "auth.login" → "auth")
-        $group = str($key)->before('.');
-
-        Cache::forget("translations.{$locale}.{$group}");
-        Cache::forget("translations.{$locale}");
-        Cache::forget("translations.full.{$locale}");
+        $group = str($translation->key)->before('.');
+        foreach (Translation::availableLocales() as $locale) {
+            Cache::forget("translations.{$locale}.{$group}");
+            Cache::forget("translations.{$locale}");
+            Cache::forget("translations.full.{$locale}");
+        }
     }
 }
