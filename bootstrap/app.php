@@ -8,6 +8,8 @@ use Illuminate\Http\Middleware\AddLinkHeadersForPreloadedAssets;
 use App\Http\Middleware\RedirectIfAuthenticated;
 use App\Http\Middleware\Authenticate as Authenticate;
 use App\Http\Middleware\RoleMiddleware;
+use App\Http\Middleware\SetLocale;
+use App\Providers\TranslationServiceProvider;
 use Illuminate\Support\Facades\Route;
 
 return Application::configure(basePath: dirname(__DIR__))
@@ -28,6 +30,9 @@ return Application::configure(basePath: dirname(__DIR__))
             });
         }
     )
+    ->withProviders([
+        TranslationServiceProvider::class,
+    ])
     ->withMiddleware(function (Middleware $middleware): void {
         /*$middleware->web(append: [
             \App\Http\Middleware\HandleInertiaRequests::class,
@@ -38,6 +43,7 @@ return Application::configure(basePath: dirname(__DIR__))
         $middleware->web(append: [
             HandleInertiaRequests::class,
             AddLinkHeadersForPreloadedAssets::class,
+            SetLocale::class,
         ]);
 
         $middleware->alias([

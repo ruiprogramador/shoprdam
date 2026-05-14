@@ -41,6 +41,9 @@
         "@inertiajs/core": "^2.2.19",
         "@tailwindcss/vite": "^4.1.11",
         "@tanstack/vue-table": "^8.21.3",
+        "@tiptap/pm": "^3.22.5",
+        "@tiptap/starter-kit": "^3.22.5",
+        "@tiptap/vue-3": "^3.22.5",
         "@vueuse/core": "^12.8.2",
         "class-variance-authority": "^0.7.1",
         "clsx": "^2.1.1",
@@ -58,6 +61,7 @@
         "vite": "^7.2.4",
         "vue": "^3.5.13",
         "vue-filepond": "^7.0.4",
+        "vue-i18n": "^11.4.0",
         "vue-toastification": "^2.0.0-rc.5"
     },
     "optionalDependencies": {
