@@ -2,9 +2,9 @@
 
 namespace App\Http\Controllers\Admin;
 
- 
 use App\Http\Controllers\Controller;
 use App\Models\Translation;
+use App\Models\TranslationValue;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\RedirectResponse;
 use Illuminate\Http\Request;
@@ -17,146 +17,179 @@ use Spatie\QueryBuilder\QueryBuilder;
 
 class TranslationController extends Controller
 {
-    /**
-     * Display all translations.
-     */
     public function index(Request $request): Response
     {
-        $defaultLocale = auth('admin')->user()->locale ?? 'en';
+        $locale = $request->input('filter.locale',
+            auth('admin')->user()->locale ?? 'en'
+        );
 
         $translations = QueryBuilder::for(Translation::class)
-            ->with(['creator', 'updater'])
-            ->where('locale', request('filter.locale', $defaultLocale))
+            ->with(['values' => fn ($q) => $q->where('locale', $locale)])
             ->allowedFilters(
-                AllowedFilter::exact('locale'),
-                AllowedFilter::exact('group'),
+                // Filtra pela locale através da relação values
+                AllowedFilter::callback('locale', fn ($query, $value) =>
+                    $query->whereHas('values', fn ($q) => $q->where('locale', $value))
+                ),
+                // Filtra pelo group (prefixo da key)
+                AllowedFilter::callback('group', fn ($query, $value) =>
+                    $query->where('key', 'like', "{$value}.%")
+                ),
                 AllowedFilter::callback('search', fn ($query, $value) =>
                     $query->where(fn ($q) =>
                         $q->where('key', 'like', "%{$value}%")
-                        ->orWhere('text_short', 'like', "%{$value}%")
-                        ->orWhere('text', 'like', "%{$value}%")
+                          ->orWhere('label', 'like', "%{$value}%")
+                          ->orWhereHas('values', fn ($q2) =>
+                              $q2->where('value_short', 'like', "%{$value}%")
+                                 ->orWhere('value', 'like', "%{$value}%")
+                          )
                     )
                 ),
             )
             ->allowedSorts(
-                AllowedSort::field('group'),
                 AllowedSort::field('key'),
+                AllowedSort::field('label'),
                 AllowedSort::field('updated_at'),
             )
-            ->defaultSort('group')
-            ->paginate(request('per_page', 25))
+            ->defaultSort('key')
+            ->paginate($request->integer('per_page', 25))
             ->withQueryString();
- 
+
         return Inertia::render('Admin/Translations/Index', [
             'translations' => $translations,
             'locales'      => Translation::availableLocales(),
             'groups'       => Translation::availableGroups(),
-            'filters'      => request()->only(['filter', 'sort', 'per_page']),
+            'filters'      => $request->only(['filter', 'sort', 'per_page']),
         ]);
-    }
-
-    public function show(Request $request): JsonResponse
-    {
-        $request->validate([
-            'group' => ['required', 'string'],
-            'key'   => ['required', 'string'],
-        ]);
- 
-        $translations = Translation::query()
-            ->where('group', $request->group)
-            ->where('key', $request->key)
-            ->with(['creator', 'updater'])
-            ->get()
-            ->keyBy('locale');
- 
-        return response()->json($translations);
     }
 
     /**
-     * Store a new translation.
+     * Devolve todos os valores (por locale) para uma dada key.
+     */
+    public function show(Request $request): JsonResponse
+    {
+        $request->validate([
+            'key' => ['required', 'string'],
+        ]);
+
+        $translation = Translation::where('key', $request->key)
+            ->with(['values.updater'])
+            ->firstOrFail();
+
+        // Keyed por locale para o front-end
+        $values = $translation->values->keyBy('locale');
+
+        return response()->json([
+            'translation' => $translation,
+            'values'      => $values,
+        ]);
+    }
+
+    /**
+     * Cria ou actualiza o TranslationValue para uma locale específica.
+     * O Translation (a key) deve já existir.
      */
     public function store(Request $request): RedirectResponse
     {
         $request->validate([
-            'locale'     => ['required', 'string', 'max:10'],
-            'group'      => ['required', 'string', 'max:255'],
-            'key'        => ['required', 'string', 'max:255'],
-            'text_short' => ['nullable', 'string'],
-            'text'       => ['required', 'string'],
-            'text_long'  => ['nullable', 'string'],
-            'text_html'  => ['nullable', 'string'],
+            'key'         => ['required', 'string', 'max:255'],
+            'label'       => ['nullable', 'string', 'max:255'],
+            'locale'      => ['required', 'string', 'max:10'],
+            'value_short' => ['nullable', 'string'],
+            'value'       => ['required', 'string'],
+            'value_long'  => ['nullable', 'string'],
+            'value_html'  => ['nullable', 'string'],
+            'status'      => ['nullable', 'in:missing,auto,done'],
         ]);
 
-        Translation::updateOrCreate(
+        $translation = Translation::firstOrCreate(
+            ['key' => $request->key],
+            ['label' => $request->input('label', $request->key)]
+        );
+
+        TranslationValue::updateOrCreate(
             [
-                'locale' => $request->locale,
-                'group'  => $request->group,
-                'key'    => $request->key,
+                'translation_id' => $translation->id,
+                'locale'         => $request->locale,
             ],
             [
-                'text_short' => $request->text_short,
-                'text'       => $request->text,
-                'text_long'  => $request->text_long,
-                'text_html'  => $request->text_html,
-                'created_by' => auth('admin')->id(),
-                'updated_by' => auth('admin')->id(),
+                'value_short'   => $request->value_short,
+                'value'         => $request->value,
+                'value_long'    => $request->value_long,
+                'value_html'    => $request->value_html,
+                'status'        => $request->input('status', 'done'),
+                'updated_by'    => auth('admin')->id(),
+                'translated_at' => now(),
             ]
         );
 
-        $this->clearCache($request->locale, $request->group);
+        $this->clearCache($request->locale, $request->key);
 
         if ($request->boolean('is_last')) {
             return back()->with('success', 'Translation saved successfully.');
         }
 
-        return back(); // ← sem flash nos intermédios
+        return back();
     }
 
     /**
-     * Update a translation.
+     * Actualiza um TranslationValue directamente pelo seu id.
      */
-    public function update(Request $request, Translation $translation): RedirectResponse
+    public function update(Request $request, TranslationValue $translationValue): RedirectResponse
     {
-        // dd("Não está chegando aqui", $request->all(), $translation);
         $request->validate([
-            'text_short' => ['nullable', 'string'],
-            'text'       => ['required', 'string'],
-            'text_long'  => ['nullable', 'string'],
-            'text_html'  => ['nullable', 'string'],
+            'value_short' => ['nullable', 'string'],
+            'value'       => ['required', 'string'],
+            'value_long'  => ['nullable', 'string'],
+            'value_html'  => ['nullable', 'string'],
+            'status'      => ['nullable', 'in:missing,auto,done'],
         ]);
 
-        $translation->update([
-            'text_short' => $request->text_short,
-            'text'       => $request->text,
-            'text_long'  => $request->text_long,
-            'text_html'  => $request->text_html,
-            'updated_by' => auth('admin')->id(),
+        $translationValue->update([
+            'value_short'   => $request->value_short,
+            'value'         => $request->value,
+            'value_long'    => $request->value_long,
+            'value_html'    => $request->value_html,
+            'status'        => $request->input('status', 'done'),
+            'updated_by'    => auth('admin')->id(),
+            'translated_at' => now(),
         ]);
 
-        $this->clearCache($translation->locale, $translation->group);
+        $this->clearCache(
+            $translationValue->locale,
+            $translationValue->translation->key
+        );
 
         if ($request->boolean('is_last')) {
             return back()->with('success', 'Translation saved successfully.');
         }
 
-        return back(); // ← sem flash nos intermédios
+        return back();
     }
 
     /**
-     * Delete a translation.
+     * Apaga um TranslationValue (e o Translation pai se ficar sem valores).
      */
-    public function destroy(Translation $translation): RedirectResponse
+    public function destroy(TranslationValue $translationValue): RedirectResponse
     {
-        $translation->update(['deleted_by' => auth('admin')->id()]);
-        $translation->delete();
+        $translation = $translationValue->translation;
 
-        $this->clearCache($translation->locale, $translation->group);
+        $this->clearCache($translationValue->locale, $translation->key);
+
+        $translationValue->delete();
+
+        // Apaga o pai se já não tiver nenhum valor
+        if ($translation->values()->doesntExist()) {
+            $translation->delete();
+        }
 
         return back()->with('success', 'Translation deleted successfully.');
     }
 
-    private function clearCache(string $locale, string $group): void
+    private function clearCache(string $locale, string $key): void
     {
+        // Extrai o group do prefixo da key (ex: "auth.login" → "auth")
+        $group = str($key)->before('.');
+
         Cache::forget("translations.{$locale}.{$group}");
         Cache::forget("translations.{$locale}");
         Cache::forget("translations.full.{$locale}");

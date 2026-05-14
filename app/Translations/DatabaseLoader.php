@@ -8,24 +8,16 @@ use Illuminate\Support\Facades\Cache;
 
 class DatabaseLoader extends FileLoader
 {
-    /**
-     * Load the messages for the given locale and group.
-     * First loads from files (fallback), then overrides with DB translations.
-     */
     public function load($locale, $group, $namespace = null): array
     {
-        // Load file-based translations as fallback
         $fileTranslations = parent::load($locale, $group, $namespace);
 
-        // Skip DB for vendor namespaced translations
         if ($namespace && $namespace !== '*') {
             return $fileTranslations;
         }
 
-        // Load from DB with cache
         $dbTranslations = $this->loadFromDatabase($locale, $group);
 
-        // DB translations override file translations
         return array_merge($fileTranslations, $dbTranslations);
     }
 
@@ -34,11 +26,15 @@ class DatabaseLoader extends FileLoader
         $cacheKey = "translations.{$locale}.{$group}";
 
         return Cache::remember($cacheKey, now()->addHour(), function () use ($locale, $group) {
-            return Translation::query()
-                ->where('locale', $locale)
-                ->where('group', $group)
-                ->whereNotNull('text')
-                ->pluck('text', 'key')
+            return Translation::with(['values' => fn ($q) => $q->where('locale', $locale)])
+                ->where('key', 'like', "{$group}.%")
+                ->get()
+                ->mapWithKeys(function ($translation) use ($group) {
+                    $subKey = substr($translation->key, strlen($group) + 1);
+                    $value  = $translation->values->first()?->value;
+
+                    return $value ? [$subKey => $value] : [];
+                })
                 ->toArray();
         });
     }

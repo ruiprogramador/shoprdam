@@ -3,115 +3,108 @@
 namespace App\Models;
 
 use Illuminate\Database\Eloquent\Model;
-use Illuminate\Database\Eloquent\Relations\BelongsTo;
-use Illuminate\Database\Eloquent\SoftDeletes;
+use Illuminate\Database\Eloquent\Relations\HasMany;
 
 class Translation extends Model
 {
-    use SoftDeletes;
-
-    protected $table = 'translations';
-
     protected $fillable = [
-        'locale',
-        'group',
         'key',
-        'text_short',
-        'text',
-        'text_long',
-        'text_html',
-        'created_by',
-        'updated_by',
-        'deleted_by',
+        'label',
+        'context',
+        'is_system',
+    ];
+
+    protected $casts = [
+        'is_system' => 'boolean',
     ];
 
     // ─── Relations ───────────────────────────────────────────────
-    public function creator(): BelongsTo
+
+    public function values(): HasMany
     {
-        return $this->belongsTo(Admin::class, 'created_by');
+        return $this->hasMany(TranslationValue::class, 'translation_id');
     }
 
-    public function updater(): BelongsTo
+    public function valueFor(string $locale): ?TranslationValue
     {
-        return $this->belongsTo(Admin::class, 'updated_by');
-    }
-
-    public function deleter(): BelongsTo
-    {
-        return $this->belongsTo(Admin::class, 'deleted_by');
+        // Assume que values já foi eager-loaded; caso contrário usa where()
+        return $this->relationLoaded('values')
+            ? $this->values->firstWhere('locale', $locale)
+            : $this->values()->where('locale', $locale)->first();
     }
 
     // ─── Scopes ──────────────────────────────────────────────────
+
+    // Filtra pela locale via join na tabela values
     public function scopeForLocale($query, string $locale)
     {
-        return $query->where('locale', $locale);
+        return $query->whereHas('values', fn ($q) => $q->where('locale', $locale));
     }
 
+    // Filtra por group (prefixo da key, ex: "auth")
     public function scopeForGroup($query, string $group)
     {
-        return $query->where('group', $group);
+        return $query->where('key', 'like', "{$group}.%");
     }
 
     // ─── Helpers ─────────────────────────────────────────────────
 
     /**
-     * Get translations for __() compatibility.
-     * Returns text as the default value.
+     * Devolve as locales disponíveis a partir de translation_values.
      */
-    public static function getForLocale(string $locale): array
+    public static function availableLocales(): array
     {
-        return static::forLocale($locale)
-            ->get()
-            ->groupBy('group')
-            ->map(fn ($items) =>
-                $items->pluck('text', 'key')
-            )
+        return TranslationValue::distinct()
+            ->orderBy('locale')
+            ->pluck('locale')
             ->toArray();
     }
 
     /**
-     * Get full translation data for Vue/Inertia.
-     * Includes all text variants.
+     * Devolve os grupos disponíveis (prefixo antes do primeiro '.' na key).
      */
-    public static function getFullForLocale(string $locale): array
+    public static function availableGroups(): array
     {
-        /* return static::forLocale($locale)
-            ->get(['group', 'key', 'text_short', 'text', 'text_long'])
-            ->groupBy('group')
-            ->map(fn ($items) =>
-                $items->keyBy('key')->map(fn ($item) => [
-                    'short' => $item->text_short,
-                    'text'  => $item->text,
-                    'long'  => $item->text_long,
-                ])
-            )
-            ->toArray(); */
-
-        return self::query()
-            ->where('locale', $locale)
-            ->get()
-            ->groupBy('group')
-            ->map(function ($groupItems) {
-                return $groupItems->mapWithKeys(function ($item) {
-                    return [
-                        $item->key => [
-                            'short' => $item->text_short,
-                            'text'  => $item->text,
-                            'long'  => $item->text_long,
-                        ]
-                    ];
-                });
-            })
+        return static::selectRaw("SUBSTRING_INDEX(`key`, '.', 1) as grp")
+            ->distinct()
+            ->orderBy('grp')
+            ->pluck('grp')
             ->toArray();
     }
 
-    public static function availableLocales(): array
+    /**
+     * Para o DatabaseLoader / __() — devolve [subkey => value].
+     */
+    public static function getForLocale(string $locale): array
     {
-        return static::distinct()->pluck('locale')->sort()->values()->toArray();
+        return static::with(['values' => fn ($q) => $q->where('locale', $locale)])
+            ->get()
+            ->mapWithKeys(fn ($t) => [
+                $t->key => $t->values->first()?->value ?? $t->key,
+            ])
+            ->toArray();
     }
 
-    public static function availableGroups(): array
+    /**
+     * Para o Vue/Inertia — devolve todos os variants por key.
+     */
+    public static function getFullForLocale(string $locale): array
     {
-        return static::distinct()->pluck('group')->sort()->values()->toArray();
+        return static::with(['values' => fn ($q) => $q->where('locale', $locale)])
+            ->get()
+            ->mapWithKeys(function ($t) {
+                $v = $t->values->first();
+
+                return [
+                    $t->key => [
+                        'short'  => $v?->value_short,
+                        'text'   => $v?->value,
+                        'long'   => $v?->value_long,
+                        'html'   => $v?->value_html,
+                        'status' => $v?->status ?? 'missing',
+                    ],
+                ];
+            })
+            ->toArray();
     }
 }
