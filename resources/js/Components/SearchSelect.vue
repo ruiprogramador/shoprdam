@@ -231,9 +231,7 @@ onBeforeUnmount(() => {
     <!-- Trigger box -->
     <div
         class="min-h-[2.5rem] w-full flex flex-wrap items-center gap-1
-               border rounded-md px-2 py-1 bg-white cursor-text
-               focus-within:ring-2 focus-within:ring-indigo-500 focus-within:border-indigo-500
-               transition"
+               border rounded-md px-2 bg-white cursor-text"
         :class="[
             disabled ? 'opacity-60 cursor-not-allowed bg-gray-50' : '',
             isOpen ? 'border-indigo-500 ring-2 ring-indigo-500' : 'border-gray-300',
@@ -274,7 +272,7 @@ onBeforeUnmount(() => {
             :disabled="disabled"
             :aria-autocomplete="'list'"
             :aria-activedescendant="activeIndex >= 0 ? `opt-${instanceId}-${activeIndex}` : undefined"
-            class="flex-1 min-w-[4rem] outline-none text-sm bg-transparent py-0.5"
+            class="flex-1 min-w-[4rem] text-sm bg-transparent py-0.5"
             @focus="open"
             @input="onInput"
             @keydown="onKeydown"

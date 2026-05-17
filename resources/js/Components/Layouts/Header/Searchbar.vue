@@ -1,29 +1,12 @@
 <script setup>
 import { ref, computed } from 'vue'
 import { router, usePage } from '@inertiajs/vue3'
+import CategoryDrilldown from '@/Components/CategoryDrilldown.vue'
 
-const page           = usePage()
-const searchQuery    = ref('')
+const page             = usePage()
+const searchQuery      = ref('')
 const selectedCategory = ref('')
-
-// Categorias via Inertia shared props (partilhadas pelo middleware)
-// Se não tiveres isto no middleware, usa axios e descomenta o bloco em baixo.
-const categories = computed(() => page.props.categories ?? [])
-
-/*
-// Alternativa axios:
-import axios from 'axios'
-import { onMounted } from 'vue'
-const categories = ref([])
-onMounted(async () => {
-    try {
-        const response = await axios.get('/api/categories')
-        categories.value = response.data.data
-    } catch (error) {
-        console.error('Erro ao carregar categorias:', error)
-    }
-})
-*/
+const categories       = computed(() => page.props.categories ?? [])
 
 const handleSearch = () => {
     const query = { q: searchQuery.value }
@@ -35,14 +18,25 @@ const handleSearch = () => {
 <template>
     <div class="search-style-2">
         <form @submit.prevent="handleSearch">
-            <select v-model="selectedCategory" class="select-active">
-                <option value="">All Categories</option>
-                <option v-for="category in categories" :key="category.id" :value="category.slug">
-                    {{ category.name }}
-                </option>
-            </select>
-            <input v-model="searchQuery" type="text" placeholder="Search for items..." />
-            <button class="btn-searchbox" type="submit"><i class="fa fa-search"></i></button>
+
+            <!-- SearchSelect em vez de <select> nativo -->
+            <div style="width:180px; flex-shrink:0; border-right: 1px solid var(--borderColor); height: 50px">
+                <CategoryDrilldown
+                    v-model="selectedCategory"
+                    :categories="categories"
+                    placeholder="All Categories"
+                />
+            </div>
+            <div class="search-input">
+                <input
+                    v-model="searchQuery"
+                    type="text"
+                    placeholder="Search for items..."
+                />
+
+                <button class="btn-searchbox" type="submit" aria-label="Search" style="color: var(--textColor);" />
+            </div>
+
         </form>
     </div>
 </template>
