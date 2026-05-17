@@ -1,27 +1,34 @@
 <script setup>
-import { ref, onMounted } from 'vue'
-import { router } from '@inertiajs/vue3'
-import axios from 'axios'
+import { ref, computed } from 'vue'
+import { router, usePage } from '@inertiajs/vue3'
 
-const searchQuery = ref('')
+const page           = usePage()
+const searchQuery    = ref('')
 const selectedCategory = ref('')
-const categories = ref([])
 
+// Categorias via Inertia shared props (partilhadas pelo middleware)
+// Se não tiveres isto no middleware, usa axios e descomenta o bloco em baixo.
+const categories = computed(() => page.props.categories ?? [])
+
+/*
+// Alternativa axios:
+import axios from 'axios'
+import { onMounted } from 'vue'
+const categories = ref([])
 onMounted(async () => {
-  /* try {
-    const response = await axios.get('/api/categories')
-    categories.value = response.data.data
-  } catch (error) {
-    console.error('Error fetching categories:', error)
-  } */
+    try {
+        const response = await axios.get('/api/categories')
+        categories.value = response.data.data
+    } catch (error) {
+        console.error('Erro ao carregar categorias:', error)
+    }
 })
+*/
 
 const handleSearch = () => {
-  const query = { q: searchQuery.value }
-  if (selectedCategory.value) {
-    query.category = selectedCategory.value
-  }
-  router.get(route('shop.index'), query)
+    const query = { q: searchQuery.value }
+    if (selectedCategory.value) query.category = selectedCategory.value
+    router.get(route('shop.index'), query)
 }
 </script>
 
@@ -35,7 +42,7 @@ const handleSearch = () => {
                 </option>
             </select>
             <input v-model="searchQuery" type="text" placeholder="Search for items..." />
-            <button class="btn-searchbox" type="submit"><i class="fi-rs-search"></i></button>
+            <button class="btn-searchbox" type="submit"><i class="fa fa-search"></i></button>
         </form>
     </div>
 </template>

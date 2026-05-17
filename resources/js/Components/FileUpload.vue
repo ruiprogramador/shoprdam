@@ -4,33 +4,34 @@ import { ref, watch, computed } from 'vue'
 const props = defineProps({
     src: {
         type: [String, File, Array, null],
-        default: null
+        default: null,
     },
     name: {
         type: String,
-        default: 'file'  // changed from 'image'
+        default: 'file',
     },
     labelIdle: {
         type: String,
-        default: 'Drag & Drop your file or <span class="filepond--label-action">Browse</span>'  // changed from 'image'
+        default: 'Drag & Drop your file or <span class="filepond--label-action">Browse</span>',
     },
     acceptedFileTypes: {
         type: String,
-        default: null  // null = accept any file type
+        default: null,
     },
     maxFileSize: {
         type: String,
-        default: '10MB'  // increased from 5MB for generic files
+        default: '10MB',
     },
     allowMultiple: {
         type: Boolean,
-        default: false
-    }
+        default: false,
+    },
 })
 
 const emit = defineEmits(['update:src'])
 const filesList = ref([])
 const isReady = ref(false)
+const uploadError = ref(null)
 
 const normalizedSrc = computed(() => {
     if (!props.src) return []
@@ -40,24 +41,24 @@ const normalizedSrc = computed(() => {
 const urlToFile = async (url) => {
     try {
         const response = await fetch(url)
+        if (!response.ok) throw new Error(`HTTP ${response.status}`)
         const blob = await response.blob()
-        const filename = url.split('/').pop() || 'file'  // changed from 'image.jpg'
+        const filename = url.split('/').pop() || 'file'
         return new File([blob], filename, { type: blob.type })
     } catch (e) {
-        console.error('FileUpload: Failed to fetch file URL:', url, e)
+        uploadError.value = `Não foi possível carregar o ficheiro: ${e.message}`
         return null
     }
 }
 
 const initializeFiles = async () => {
     isReady.value = false
+    uploadError.value = null
 
     const items = await Promise.all(
         normalizedSrc.value.map(async (item) => {
-            if (typeof item === 'string') {
-                return await urlToFile(item)
-            }
-            return item // already a File object
+            if (typeof item === 'string') return await urlToFile(item)
+            return item
         })
     )
 
@@ -76,19 +77,20 @@ watch(
 )
 
 const handleFilesUpdate = (fileItems) => {
-    const files = fileItems.map(item => item.file).filter(Boolean)
-
+    const files = fileItems.map((item) => item.file).filter(Boolean)
     if (!files.length) {
         emit('update:src', null)
         return
     }
-
     emit('update:src', props.allowMultiple ? files : files[0])
 }
 </script>
 
 <template>
-    <div class="file-upload-wrapper">
+    <div class="file-upload-wrapper w-full">
+        <p v-if="uploadError" class="text-sm text-red-600 mb-2" role="alert">
+            {{ uploadError }}
+        </p>
         <file-pond
             v-if="isReady"
             :name="name"
@@ -99,21 +101,12 @@ const handleFilesUpdate = (fileItems) => {
             :allow-multiple="allowMultiple"
             @updatefiles="handleFilesUpdate"
         />
-        <div v-else class="filepond-loading">
-            Loading...
+        <div v-else class="flex items-center justify-center p-6 border-2 border-dashed border-gray-300 rounded-md text-sm text-gray-400">
+            <svg class="animate-spin h-5 w-5 mr-2 text-gray-400" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24">
+                <circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4"/>
+                <path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8v8H4z"/>
+            </svg>
+            A carregar...
         </div>
     </div>
 </template>
-
-<style>
-.file-upload-wrapper {
-    width: 100%;
-}
-.filepond-loading {
-    padding: 1rem;
-    text-align: center;
-    color: #999;
-    border: 2px dashed #ddd;
-    border-radius: 4px;
-}
-</style>

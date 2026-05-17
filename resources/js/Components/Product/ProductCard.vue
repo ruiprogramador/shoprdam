@@ -59,21 +59,21 @@ const addToCompare = () => {
           class="action-btn"
           @click.prevent="addToWishlist"
         >
-          <i class="fi-rs-heart"></i>
+          <i class="fa fa-heart"></i>
         </a>
         <a
           aria-label="Compare"
           class="action-btn"
           @click.prevent="addToCompare"
         >
-          <i class="fi-rs-shuffle"></i>
+          <i class="fa fa-exchange-alt"></i>
         </a>
         <a
           aria-label="Quick view"
           class="action-btn"
           @click.prevent="$emit('quick-view', product)"
         >
-          <i class="fi-rs-eye"></i>
+          <i class="fa fa-eye"></i>
         </a>
       </div>
 
@@ -118,7 +118,7 @@ const addToCompare = () => {
         </div>
         <div class="add-cart">
           <a class="add" @click.prevent="addToCart">
-            <i class="fi-rs-shopping-cart mr-5"></i>Add
+            <i class="fa fa-shopping-cart mr-5"></i>Add
           </a>
         </div>
       </div>

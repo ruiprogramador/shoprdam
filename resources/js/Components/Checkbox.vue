@@ -1,7 +1,9 @@
 <script setup>
-import { computed } from 'vue';
+import { computed } from 'vue'
 
-const emit = defineEmits(['update:checked']);
+defineOptions({ inheritAttrs: false })
+
+const emit = defineEmits(['update:checked'])
 
 const props = defineProps({
     checked: {
@@ -11,24 +13,27 @@ const props = defineProps({
     value: {
         default: null,
     },
-});
+})
 
 const proxyChecked = computed({
     get() {
-        return props.checked;
+        return props.checked
     },
-
     set(val) {
-        emit('update:checked', val);
+        emit('update:checked', val)
     },
-});
+})
 </script>
 
 <template>
     <input
+        v-bind="$attrs"
         type="checkbox"
         :value="value"
         v-model="proxyChecked"
-        class="rounded border-gray-300 text-indigo-600 shadow-sm focus:ring-indigo-500"
+        class="rounded border-gray-300 text-indigo-600 shadow-sm
+               focus:ring-indigo-500 focus:ring-offset-0
+               disabled:opacity-50 disabled:cursor-not-allowed
+               cursor-pointer w-4 h-4"
     />
 </template>
