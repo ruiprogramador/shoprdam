@@ -1,6 +1,7 @@
 import './echo'
 import '../css/app.css'
 import '../css/navbar-vertical.css'
+import '../css/category-drilldown.css'
 import '../css/tabler/tabler.min.css'
 import '../css/main.css'
 import '../css/header-navbar.css'

@@ -7156,7 +7156,7 @@ h6.post-title {
     top: 50%;
     transform: translateY(-50%);
     background-color: transparent;
-    border: none;
+    border: 1px solid var(--borderColor);
     font-size: 20px;
     color: var(--colorPrimary);
     height: 100%;
@@ -7172,12 +7172,16 @@ h6.post-title {
     font-family: 'Font Awesome 5 Free'; /* Ensure you're using the correct Font Awesome version */
     font-weight: 900; /* solid icons */
     font-size: 18px;
-    color: var(--textSecondary);
+    color: var(--colorPrimary);
 
     position: absolute;
     top: 50%;
     left: 50%;
     transform: translate(-50%, -50%);
+}
+
+.search-style-2 form button.btn-searchbox:hover {
+    color: var(--colorPrimaryLight);
 }
 
 .header-bottom-shadow {
@@ -7911,6 +7915,16 @@ h6.post-title {
     border-width: 0px;
     background-color: var(--bgSurface);
     border: none;
+}
+
+.header-style-1 .search-style-2 .search-input{
+    width: -webkit-fill-available;
+}
+
+.header-style-1 .search-style-2 .search-input input {
+    border: 1px solid var(--borderColor);
+    border-radius: 5px;
+    background-color: var(--bgSurface);
 }
 
 .header-style-1 .main-categori-wrap > a {
