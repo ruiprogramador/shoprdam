@@ -1,140 +1,97 @@
 <script setup>
+import { computed } from 'vue'
+import Dropdown     from '@/Components/Dropdown.vue'
+import DropdownLink from '@/Components/DropdownLink.vue'
+import SecondaryButton from '@/Components/SecondaryButton.vue'
 
-import { computed } from 'vue';
-import Dropdown from '@/Components/Dropdown.vue';
-import DropdownLink from '@/Components/DropdownLink.vue';
-
-const props = defineProps(['sidebarOpen', 'theme', 'isMobile', 'loggedInUser']);
-
-// loggedInUser can be a vendor or a customer or admin but admin doesn't have a type field, so we can check for the presence of the type field to determine if it's a vendor or customer
-// and route edit and logout accordingly 
-const userType = computed(() => {
-    if (props?.loggedInUser?.user_type_id === 2) return 'vendor';
-    return 'admin';
-})
-console.log("User type:");
-console.log(userType.value);
-console.log("props.loggedInUser:");
-console.log(props.loggedInUser);
-
-const profileRoute = computed(() => {
-    switch (userType.value) {
-        case 'admin':
-            return route('admin.profile.edit');
-        /* case 'vendor':
-            return route('profile.edit');
-        case 'customer':
-            return route('customer.profile.edit'); */
-        default:
-            return route('profile.edit');
-    }
-})
-const logoutRoute = computed(() => {
-    switch (userType.value) {
-        case 'admin':
-            return route('admin.logout');
-        /* case 'vendor':
-            return route('vendor.logout');
-        case 'customer':
-            return route('customer.logout'); */
-        default:
-            return route('logout');
-    }
+const props = defineProps({
+    sidebarOpen:  { type: Boolean, default: false },
+    theme:        { type: String,  default: 'light' },
+    isMobile:     { type: Boolean, default: false },
+    loggedInUser: { type: Object,  default: null },
 })
 
-const emit = defineEmits(['toggle-sidebar'])
-const toggleTheme = () => {
-    emit('toggle-theme');
-}
+const emit = defineEmits(['toggle-sidebar', 'toggle-theme'])
+
+const userType = computed(() =>
+    props.loggedInUser?.user_type_id === 2 ? 'vendor' : 'admin'
+)
+
+const profileRoute = computed(() =>
+    userType.value === 'admin' ? route('admin.profile.edit') : route('profile.edit')
+)
+
+const logoutRoute = computed(() =>
+    userType.value === 'admin' ? route('admin.logout') : route('logout')
+)
 </script>
 
 <template>
-    <header class="navbar">
-        <button
-            class="btn btn-icon toggle-sidebar"
-            @click="emit('toggle-sidebar')"
-        >
-            <i :class="sidebarOpen ? 'fas fa-times' : 'fas fa-bars'"></i>
-        </button>
+    <header class="sticky top-0 z-30 w-full bg-white border-b border-gray-200 shadow-sm">
+        <div class="flex items-center h-14 sm:h-16 px-3 sm:px-4 gap-2 sm:gap-4">
 
-        <!-- Right section -->
-        <div class="navbar-nav flex-row order-md-last ms-auto" v-if="!isMobile">
-
-            <!-- Dark mode placeholder -->
-            <!-- <a href="#" class="nav-link px-0">
-            🌙
-            </a> -->
-            <a
-                href="#"
-                class="nav-link px-0"
-                @click.prevent="toggleTheme"
+            <!-- Sidebar toggle -->
+            <SecondaryButton
+                :aria-label="sidebarOpen ? 'Fechar menu' : 'Abrir menu'"
+                @click="emit('toggle-sidebar')"
             >
-                {{ theme === 'dark' ? '☀️' : '🌙' }}
-            </a>
+                <svg v-if="sidebarOpen" class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                    <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M6 18L18 6M6 6l12 12"/>
+                </svg>
+                <svg v-else class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                    <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 6h16M4 12h16M4 18h16"/>
+                </svg>
+            </SecondaryButton>
 
+            <!-- Spacer -->
+            <div class="flex-1" />
 
-            <!-- User dropdown
-            <div class="nav-item dropdown">
-            <a href="#" class="nav-link d-flex lh-1 text-reset p-0">
-                <span class="avatar avatar-sm"></span>
-                <div class="d-none d-xl-block ps-2">
-                <div>{{ $page.props.auth.user.name }}</div>
-                <div class="mt-1 small text-secondary">Developer</div>
-                </div>
-            </a>
-            </div> -->
-            <Dropdown align="right" width="48">
-                <div>{{ $page.props.auth.user.name }}</div>
-                <template #trigger>
-                    <span class="inline-flex rounded-md">
+            <!-- Direita -->
+            <div class="flex items-center gap-1 sm:gap-2">
+
+                <!-- Theme toggle -->
+                <button
+                    type="button"
+                    class="p-2 rounded-md text-gray-500 hover:text-gray-900 hover:bg-gray-100
+                           focus:outline-none focus:ring-2 focus:ring-indigo-500"
+                    :aria-label="theme === 'dark' ? 'Mudar para modo claro' : 'Mudar para modo escuro'"
+                    @click.prevent="emit('toggle-theme')"
+                >
+                    <span class="text-base leading-none select-none">
+                        {{ theme === 'dark' ? '☀️' : '🌙' }}
+                    </span>
+                </button>
+
+                <!-- User dropdown -->
+                <Dropdown align="right" width="48">
+                    <template #trigger>
                         <button
                             type="button"
-                            class="inline-flex items-center rounded-md border border-transparent bg-white px-3 py-2 text-sm font-medium leading-4 text-gray-500 transition duration-150 ease-in-out hover:text-gray-700 focus:outline-none"
+                            class="inline-flex items-center gap-2 rounded-md border border-transparent
+                                   bg-white px-2 sm:px-3 py-2 text-sm font-medium leading-4
+                                   text-gray-500 hover:text-gray-700
+                                   focus:outline-none focus:ring-2 focus:ring-indigo-500
+                                   transition duration-150 ease-in-out max-w-[140px] sm:max-w-none"
                         >
-                            {{ $page.props.auth.user.name }}
-
-                            <svg
-                                class="-me-0.5 ms-2 h-4 w-4"
-                                xmlns="http://www.w3.org/2000/svg"
-                                viewBox="0 0 20 20"
-                                fill="currentColor"
-                            >
-                                <path
-                                    fill-rule="evenodd"
-                                    d="M5.23 7.21a.75.75 0 011.06.02L10 11.168l3.71-3.938a.75.75 0 111.08 1.04l-4.25 4.5a.75.75 0 01-1.08 0l-4.25-4.5a.75.75 0 01.02-1.06z"
-                                    clip-rule="evenodd"
-                                />
+                            <span class="inline-flex items-center justify-center w-7 h-7 rounded-full
+                                         bg-indigo-100 text-indigo-700 text-xs font-bold flex-shrink-0">
+                                {{ $page.props.auth.user.name?.charAt(0).toUpperCase() }}
+                            </span>
+                            <span class="hidden sm:block truncate">
+                                {{ $page.props.auth.user.name }}
+                            </span>
+                            <svg class="-me-0.5 ms-1 h-4 w-4 flex-shrink-0" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 20 20" fill="currentColor">
+                                <path fill-rule="evenodd" d="M5.23 7.21a.75.75 0 011.06.02L10 11.168l3.71-3.938a.75.75 0 111.08 1.04l-4.25 4.5a.75.75 0 01-1.08 0l-4.25-4.5a.75.75 0 01.02-1.06z" clip-rule="evenodd"/>
                             </svg>
                         </button>
-                    </span>
-                </template>
-                <template #content>
-                    <!-- <DropdownLink
-                        :href="route('admin.profile.edit')"
-                    >
-                        Profile
-                    </DropdownLink> -->
-                    <DropdownLink
-                        :href="profileRoute"
-                    >
-                        Profile
-                    </DropdownLink>
-                    <!-- <DropdownLink
-                        :href="route('logout')"
-                        method="post"
-                        as="button"
-                    >
-                        Log Out
-                    </DropdownLink> -->
-                    <DropdownLink
-                        :href="logoutRoute"
-                        method="post"
-                        as="button"
-                    >
-                        Log Out
-                    </DropdownLink>
-                </template>
-            </Dropdown>
+                    </template>
+                    <template #content>
+                        <DropdownLink :href="profileRoute">Profile</DropdownLink>
+                        <DropdownLink :href="logoutRoute" method="post" as="button">Log Out</DropdownLink>
+                    </template>
+                </Dropdown>
+            </div>
+
         </div>
     </header>
 </template>

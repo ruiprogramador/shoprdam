@@ -1,54 +1,20 @@
-
 <script setup lang="ts">
-    import { ref } from 'vue'
+import { computed } from 'vue'
+import { usePage }  from '@inertiajs/vue3'
 
-    interface DashboardCard {
-        color: string
-        icon: string
-        count: number
-        label: string
-    }
+interface DashboardCard { color: string; icon: string; count: number; label: string }
 
-    const userName = ref('Rosie')
+const page     = usePage()
+const userName = computed(() => page.props.auth?.user?.name ?? 'there')
 
-    const dashboardCards = ref<DashboardCard[]>([
-    {
-        color: 'blue',
-        icon: 'fa-solid fa-cart-shopping',
-        count: 27,
-        label: 'Total Order',
-    },
-    {
-        color: 'red',
-        icon: 'fa-solid fa-xmark',
-        count: 24,
-        label: 'Cancel Order',
-    },
-    {
-        color: 'orange',
-        icon: 'fa-solid fa-spinner',
-        count: 30,
-        label: 'Pending Order',
-    },
-    {
-        color: 'green',
-        icon: 'fi-rs-shopping-bag',
-        count: 30,
-        label: 'Total Order',
-    },
-    {
-        color: 'pink',
-        icon: 'fi-rs-shopping-bag',
-        count: 30,
-        label: 'Total Order',
-    },
-    {
-        color: 'purple',
-        icon: 'fi-rs-shopping-bag',
-        count: 30,
-        label: 'Total Order',
-    },
-    ])
+const dashboardCards: DashboardCard[] = [
+    { color: 'blue',   icon: 'fa-solid fa-cart-shopping', count: 27, label: 'Total Order'   },
+    { color: 'red',    icon: 'fa-solid fa-xmark',         count: 24, label: 'Cancel Order'  },
+    { color: 'orange', icon: 'fa-solid fa-spinner',       count: 30, label: 'Pending Order' },
+    { color: 'green',  icon: 'fa-solid fa-check-circle', count: 30, label: 'Completed'     },
+    { color: 'pink',   icon: 'fa-solid fa-star',          count: 30, label: 'Reviews'       },
+    { color: 'purple', icon: 'fa-solid fa-heart',         count: 30, label: 'Wishlist'      },
+]
 </script>
 
 <template>
@@ -59,20 +25,16 @@
             </div>
             <div class="card-body p-0">
                 <p>
-                    From your account dashboard. you can easily check &amp; view your
-                    <a href="#">recent orders</a>,<br />
+                    From your account dashboard you can check your
+                    <a href="#">recent orders</a>,
                     manage your <a href="#">shipping and billing addresses</a> and
-                    <a href="#">edit your password and account details.</a>
+                    <a href="#">edit your password and account details</a>.
                 </p>
             </div>
         </div>
 
         <div class="row">
-            <div
-                v-for="(card, index) in dashboardCards"
-                :key="index"
-                class="col-lg-4 col-sm-6"
-            >
+            <div v-for="(card, index) in dashboardCards" :key="index" class="col-lg-4 col-sm-6">
                 <div class="dashboard_card" :class="card.color">
                     <span><i :class="card.icon"></i></span>
                     <h3>{{ card.count }}</h3>

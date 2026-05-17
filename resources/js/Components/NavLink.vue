@@ -1,6 +1,6 @@
 <script setup>
-import { computed } from 'vue';
-import { Link } from '@inertiajs/vue3';
+import { computed } from 'vue'
+import { Link } from '@inertiajs/vue3'
 
 const props = defineProps({
     href: {
@@ -9,18 +9,17 @@ const props = defineProps({
     },
     active: {
         type: Boolean,
+        default: false,
     },
-});
+})
 
 const classes = computed(() =>
-    props.active
-        ? 'active-nav-link'
-        : 'normal-nav-link'
-);
+    props.active ? 'active-nav-link' : 'normal-nav-link'
+)
 </script>
 
 <template>
-    <Link :href="href" :class="classes">
+    <Link :href="href" :class="classes" v-bind="$attrs">
         <slot />
     </Link>
 </template>

@@ -1,41 +1,36 @@
 <!-- @/Components/Breadcrumb.vue -->
 <script setup>
-import { computed } from 'vue'
 import { Link } from '@inertiajs/vue3'
 
-const props = defineProps({
+defineProps({
     items: {
         type: Array,
-        required: false,
         default: () => []
     }
 })
-
-// Force reactivity
-const breadcrumbItems = computed(() => props.items || [])
-
-console.log('Breadcrumb component loaded')
-console.log('Items:', breadcrumbItems.value)
 </script>
 
 <template>
-    <div class="breadcrumb-area" v-if="items && items.length > 0">
-        <div class="container">
-            <nav aria-label="breadcrumb">
-                <ol class="breadcrumb">
-                    <li
-                        v-for="(item, index) in items"
-                        :key="index"
-                        class="breadcrumb-item"
-                        :class="{ active: !item.url }"
-                    >
-                        <Link v-if="item.url" :href="item.url">
-                            {{ item.label }}
-                        </Link>
-                        <span v-else>{{ item.label }}</span>
-                    </li>
-                </ol>
-            </nav>
-        </div>
-    </div>
+    <nav v-if="items.length > 0" aria-label="breadcrumb" class="w-full">
+        <ol class="flex flex-wrap items-center gap-1 text-sm text-gray-500">
+            <li
+                v-for="(item, index) in items"
+                :key="index"
+                class="flex items-center gap-1"
+                :aria-current="!item.url ? 'page' : undefined"
+            >
+                <span v-if="index > 0" class="text-gray-400 select-none">/</span>
+                <Link
+                    v-if="item.url"
+                    :href="item.url"
+                    class="hover:text-gray-900 hover:underline transition-colors duration-150 truncate max-w-[140px] sm:max-w-none"
+                >
+                    {{ item.label }}
+                </Link>
+                <span v-else class="text-gray-900 font-medium truncate max-w-[140px] sm:max-w-none">
+                    {{ item.label }}
+                </span>
+            </li>
+        </ol>
+    </nav>
 </template>

@@ -1,128 +1,72 @@
 <script setup lang="ts">
-import { ref } from 'vue'
+import { useForm, usePage } from '@inertiajs/vue3'
 
-interface AccountFormData {
-  firstName: string
-  lastName: string
-  displayName: string
-  email: string
-  currentPassword: string
-  newPassword: string
-  confirmPassword: string
-}
+const page = usePage()
+const user = page.props.auth.user
 
-const formData = ref<AccountFormData>({
-  firstName: '',
-  lastName: '',
-  displayName: '',
-  email: '',
-  currentPassword: '',
-  newPassword: '',
-  confirmPassword: '',
+const form = useForm({
+    first_name:       user.first_name      ?? '',
+    last_name:        user.last_name       ?? '',
+    display_name:     user.display_name    ?? '',
+    email:            user.email           ?? '',
+    current_password: '',
+    new_password:     '',
+    confirm_password: '',
 })
 
 const handleSubmit = () => {
-  // Validate passwords match if new password is entered
-  if (formData.value.newPassword && formData.value.newPassword !== formData.value.confirmPassword) {
-    alert('New password and confirm password do not match')
-    return
-  }
-
-  // In a real application, you would make an API call here
-  console.log('Saving account details:', formData.value)
-  alert('Account details saved successfully!')
+    if (form.new_password && form.new_password !== form.confirm_password) {
+        form.setError('confirm_password', 'Passwords do not match')
+        return
+    }
+    form.post(route('profile.update'), { preserveScroll: true })
 }
 </script>
+
 <template>
     <div class="card">
         <div class="card-header p-0">
             <h5>Account Details</h5>
         </div>
         <div class="card-body p-0">
-            <p>
-                Already have an account?
-                <a href="/login">Log in instead!</a>
-            </p>
             <form @submit.prevent="handleSubmit">
                 <div class="row mt-30">
                     <div class="form-group col-md-6">
-                        <label>
-                            First Name <span class="required">*</span>
-                        </label>
-                        <input
-                            v-model="formData.firstName"
-                            required
-                            class="form-control"
-                            type="text"
-                        />
+                        <label for="first_name">First Name <span class="required">*</span></label>
+                        <input id="first_name" v-model="form.first_name" required class="form-control" type="text" />
+                        <p v-if="form.errors.first_name" class="text-danger small">{{ form.errors.first_name }}</p>
                     </div>
                     <div class="form-group col-md-6">
-                        <label>
-                            Last Name <span class="required">*</span>
-                        </label>
-                        <input
-                            v-model="formData.lastName"
-                            required
-                            class="form-control"
-                            type="text"
-                        />
+                        <label for="last_name">Last Name <span class="required">*</span></label>
+                        <input id="last_name" v-model="form.last_name" required class="form-control" type="text" />
+                        <p v-if="form.errors.last_name" class="text-danger small">{{ form.errors.last_name }}</p>
                     </div>
                     <div class="form-group col-md-12">
-                        <label>
-                            Display Name <span class="required">*</span>
-                        </label>
-                        <input
-                            v-model="formData.displayName"
-                            required
-                            class="form-control"
-                            type="text"
-                        />
+                        <label for="display_name">Display Name <span class="required">*</span></label>
+                        <input id="display_name" v-model="form.display_name" required class="form-control" type="text" />
                     </div>
                     <div class="form-group col-md-12">
-                        <label>
-                            Email Address <span class="required">*</span>
-                        </label>
-                        <input
-                            v-model="formData.email"
-                            required
-                            class="form-control"
-                            type="email"
-                        />
+                        <label for="email">Email Address <span class="required">*</span></label>
+                        <input id="email" v-model="form.email" required class="form-control" type="email" />
+                        <p v-if="form.errors.email" class="text-danger small">{{ form.errors.email }}</p>
                     </div>
                     <div class="form-group col-md-12">
-                        <label>
-                            Current Password <span class="required">*</span>
-                        </label>
-                        <input
-                            v-model="formData.currentPassword"
-                            required
-                            class="form-control"
-                            type="password"
-                        />
+                        <label for="current_password">Current Password</label>
+                        <input id="current_password" v-model="form.current_password" class="form-control" type="password" autocomplete="current-password" />
+                        <p v-if="form.errors.current_password" class="text-danger small">{{ form.errors.current_password }}</p>
                     </div>
                     <div class="form-group col-md-12">
-                        <label>
-                            New Password <span class="required">*</span>
-                        </label>
-                        <input
-                            v-model="formData.newPassword"
-                            class="form-control"
-                            type="password"
-                        />
+                        <label for="new_password">New Password</label>
+                        <input id="new_password" v-model="form.new_password" class="form-control" type="password" autocomplete="new-password" />
                     </div>
                     <div class="form-group col-md-12">
-                        <label>
-                            Confirm Password <span class="required">*</span>
-                        </label>
-                        <input
-                            v-model="formData.confirmPassword"
-                            class="form-control"
-                            type="password"
-                        />
+                        <label for="confirm_password">Confirm Password</label>
+                        <input id="confirm_password" v-model="form.confirm_password" class="form-control" type="password" autocomplete="new-password" />
+                        <p v-if="form.errors.confirm_password" class="text-danger small">{{ form.errors.confirm_password }}</p>
                     </div>
                     <div class="col-md-12">
-                        <button type="submit" class="btn btn-fill-out submit font-weight-bold">
-                            Save Changes
+                        <button type="submit" class="btn btn-fill-out submit font-weight-bold" :disabled="form.processing">
+                            {{ form.processing ? 'Saving...' : 'Save Changes' }}
                         </button>
                     </div>
                 </div>
