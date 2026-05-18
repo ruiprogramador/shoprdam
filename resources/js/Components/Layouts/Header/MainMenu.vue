@@ -7,16 +7,15 @@ import { Link } from '@inertiajs/vue3'
         <nav>
             <ul>
                 <li>
-                    <Link class="active" :href="route('home')">Home</Link>
+                    <Link :href="route('home')">Home</Link>
                 </li>
                 <li>
                     <!-- toDo: <Link :href="route('about')">About</Link> -->
-                    <span class="text-muted">About</span>
+                    <a href="#">About</a>
                 </li>
                 <li>
                     <a href="#">Shop <i class="fa fa-angle-down"></i></a>
                     <ul class="sub-menu">
-                        <!-- toDo: substituir quando routes existirem -->
                         <li><a href="#">Shop</a></li>
                         <li><a href="#">Shop Details</a></li>
                     </ul>
@@ -35,14 +34,8 @@ import { Link } from '@inertiajs/vue3'
                         <li><a href="#">Blog Details</a></li>
                     </ul>
                 </li>
-                <li>
-                    <!-- toDo: <Link :href="route('contact')">Contact</Link> -->
-                    <a href="#">Contact</a>
-                </li>
-                <li class="hot-deals">
-                    <!-- toDo: <Link :href="route('flash-sell')">Flash Sell</Link> -->
-                    <a href="#">Flash Sell</a>
-                </li>
+                <li><a href="#">Contact</a></li>
+                <li class="hot-deals"><a href="#">Flash Sell</a></li>
             </ul>
         </nav>
     </div>

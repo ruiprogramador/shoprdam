@@ -1,6 +1,6 @@
 <script setup>
 import { Link }            from '@inertiajs/vue3'
-import CategoryMegaMenu    from '@/Components/Layouts/Header/CategoryMegaMenu.vue'
+import CategoryDrilldown    from '@/Components/CategoryDrilldown.vue'
 import MainMenu            from '@/Components/Layouts/Header/MainMenu.vue'
 import MobileHeaderActions from '@/Components/Layouts/Header/MobileHeaderActions.vue'
 
@@ -37,20 +37,21 @@ const emit = defineEmits(['toggle-mobile-menu'])
                 </div>
 
                 <!-- ③ MENU DESKTOP — esquerda (xl+) -->
-                <div class="header-nav d-none d-xl-flex">
-                    <div class="main-categori-wrap d-none d-xl-block">
-                        <a class="categories-button-active" href="#">
-                            <span class="fa fa-list"></span> Trending Categories
-                            <i class="fa fa-angle-down"></i>
-                        </a>
-                        <CategoryMegaMenu />
+                <div class="header-nav d-none d-xl-flex" style="gap: 16px; align-items: center;">
+                    <div class="main-categori-wrap d-none d-xl-block" style="display:flex !important; align-items:center;">
+                        <i class="fa fa-list me-2" style="color:#fff; flex-shrink:0;"></i>
+                        <CategoryDrilldown
+                            :categories="categories"
+                            placeholder="Trending Categories"
+                            v-model="selectedCategory"
+                        />
                     </div>
                     <MainMenu />
                 </div>
 
                 <!-- ④ HOTLINE DESKTOP — direita (xl+) -->
-                <div class="hotline d-none d-xl-flex">
-                    <i class="fa fa-headphones"></i>
+                <div class="hotline d-none d-xl-flex align-items-center gap-2">
+                    <i class="fa fa-headphones" style="font-size:20px;"></i>
                     <p>0000-000<span>24/7 Support Center</span></p>
                 </div>
 
