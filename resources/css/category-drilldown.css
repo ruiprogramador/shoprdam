@@ -222,3 +222,36 @@
 .cd-list::-webkit-scrollbar { width: 4px; }
 .cd-list::-webkit-scrollbar-track { background: transparent; }
 .cd-list::-webkit-scrollbar-thumb { background: var(--borderColor, #e2e8f0); border-radius: 2px; }
+
+/* Trending Categories button — tudo branco */
+.header-bottom-bg-color .categories-button-active {
+    color: var(--colorWhite, #fff) !important;
+}
+
+.header-bottom-bg-color .categories-button-active i {
+    color: var(--colorWhite, #fff) !important;
+}
+
+/* Trigger do CategoryDrilldown dentro do header azul */
+.header-bottom-bg-color .cd-trigger {
+    color: var(--colorWhite, #fff) !important;
+    border: none !important;
+}
+
+.header-bottom-bg-color .cd-trigger__chevron {
+    color: rgba(255, 255, 255, 0.7) !important;
+}
+
+.header-bottom-bg-color .cd-trigger__label {
+    color: var(--colorWhite, #fff) !important;
+}
+
+/* Clear button outline branco */
+.header-bottom-bg-color .cd-trigger__clear {
+    color: var(--colorWhite, #fff) !important;
+    border-color: rgba(255, 255, 255, 0.5) !important;
+}
+
+.header-bottom-bg-color .cd-trigger__clear:hover {
+    border-color: var(--colorWhite, #fff) !important;
+}

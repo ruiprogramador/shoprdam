@@ -3,6 +3,12 @@
 :root {
 
     /* ================================================
+       BASE COLORS
+    ================================================ */
+    --colorWhite: #ffffff;
+    --colorBlack: #000000;
+
+    /* ================================================
        COLOR PALETTE
     ================================================ */
     --colorPrimary: #1c63e5;
@@ -6633,10 +6639,8 @@ h6.post-title {
 }
 
 .header-wrap .header-nav {
-    display: flex;
-    justify-content: space-between;
-    align-content: center;
-    align-items: center;
+    justify-content: flex-start !important;
+    gap: 0 !important;
 }
 
 .header-wrap.header-space-between {
@@ -8279,9 +8283,9 @@ h6.post-title {
     padding: 0 15px;
 }
 
-.main-menu.main-menu-padding-1 > nav > ul > li:first-child {
+/* .main-menu.main-menu-padding-1 > nav > ul > li:first-child {
     padding-left: 0 !important;
-}
+} */
 
 .main-menu.main-menu-lh-2 > nav > ul > li {
     line-height: 55px;
@@ -8356,8 +8360,20 @@ h6.post-title {
 }
 
 .main-categori-wrap {
-    position: relative;
-    margin-right: 35px;
+    width: auto !important;
+    flex-shrink: 0 !important;
+    /* margin-right: 20px !important; */
+}
+
+.main-categori-wrap .cd-root {
+    width: 100% !important;
+}
+
+/* O trigger ocupa toda a largura do wrap */
+.main-categori-wrap .cd-trigger {
+    width: 100% !important;
+    white-space: nowrap;
+    padding: 0px !important;
 }
 
 .main-categori-wrap > a {
