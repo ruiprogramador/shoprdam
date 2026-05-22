@@ -5,6 +5,8 @@ import AuthenticatedLayout from '@/Layouts/AuthenticatedLayout.vue'
 import { useKycStatus } from '@/Composables/useKycStatus'
 import { useFormatDate } from '@/Composables/useFormatDate'
 import SearchableSelect from '@/Components/SearchableSelect.vue'
+import RightFilterSidebar from '@/Components/RightFilterSidebar.vue'
+import KycFilters from '@/Components/KycFilters.vue'
 
 const props = defineProps<{
     kycs: any
@@ -262,158 +264,6 @@ const handleExport = () => {
                 </button>
             </div>
 
-            <!-- Filters Panel -->
-            <Transition
-                enter-active-class="transition-all duration-300 ease-out"
-                enter-from-class="opacity-0 -translate-y-4 scale-95"
-                enter-to-class="opacity-100 translate-y-0 scale-100"
-                leave-active-class="transition-all duration-200 ease-in"
-                leave-from-class="opacity-100 translate-y-0 scale-100"
-                leave-to-class="opacity-0 -translate-y-4 scale-95"
-            >
-                <div v-show="showFilters" class="bg-white rounded-xl shadow-lg border-2 border-gray-200">
-                    <div class="p-6 space-y-5">
-                        <!-- Main Filters Row -->
-                        <div class="grid grid-cols-1 lg:grid-cols-12 gap-4">
-                            <!-- Search -->
-                            <div class="lg:col-span-5">
-                                <label class="block text-xs font-bold text-gray-700 mb-2 uppercase tracking-wider">
-                                    <i class="fa fa-search mr-1.5 text-blue-600"></i>
-                                    Search
-                                </label>
-                                <div class="relative">
-                                    <input
-                                        v-model="search"
-                                        @input="onSearchInput"
-                                        type="text"
-                                        placeholder="Search by name, email, company..."
-                                        class="w-full pl-11 pr-10 py-3 rounded-lg border-2 border-gray-300 shadow-sm text-sm placeholder-gray-400 focus:border-blue-500 focus:ring-4 focus:ring-blue-500/20 transition-all duration-200"
-                                    />
-                                    <i class="fa fa-search absolute left-4 top-4 text-gray-400"></i>
-                                    <button
-                                        v-if="search"
-                                        @click="search = ''; applyFilters()"
-                                        class="absolute right-3 top-3.5 text-gray-400 hover:text-gray-600 transition-colors"
-                                    >
-                                        <i class="fa fa-times-circle"></i>
-                                    </button>
-                                </div>
-                            </div>
-
-                            <!-- Status Select -->
-                            <div class="lg:col-span-3">
-                                <label class="block text-xs font-bold text-gray-700 mb-2 uppercase tracking-wider">
-                                    <i class="fa fa-flag mr-1.5 text-yellow-600"></i>
-                                    Status
-                                </label>
-                                <SearchableSelect
-                                    v-model="status"
-                                    :options="statusOptions"
-                                    placeholder="Select status..."
-                                    @update:modelValue="applyFilters"
-                                />
-                            </div>
-
-                            <!-- Country Select -->
-                            <div class="lg:col-span-3">
-                                <label class="block text-xs font-bold text-gray-700 mb-2 uppercase tracking-wider">
-                                    <i class="fa fa-globe mr-1.5 text-green-600"></i>
-                                    Country
-                                </label>
-                                <SearchableSelect
-                                    v-model="countryId"
-                                    :options="countryOptions"
-                                    placeholder="Select country..."
-                                    @update:modelValue="applyFilters"
-                                />
-                            </div>
-
-                            <!-- Per Page -->
-                            <div class="lg:col-span-1">
-                                <label class="block text-xs font-bold text-gray-700 mb-2 uppercase tracking-wider">
-                                    <i class="fa fa-list mr-1.5 text-purple-600"></i>
-                                    Show
-                                </label>
-                                <select
-                                    v-model="perPage"
-                                    @change="applyFilters"
-                                    class="w-full rounded-lg border-2 border-gray-300 shadow-sm text-sm py-3 focus:border-blue-500 focus:ring-4 focus:ring-blue-500/20 transition-all duration-200"
-                                >
-                                    <option :value="10">10</option>
-                                    <option :value="25">25</option>
-                                    <option :value="50">50</option>
-                                    <option :value="100">100</option>
-                                </select>
-                            </div>
-                        </div>
-
-                        <!-- Date Range -->
-                        <div class="grid grid-cols-1 sm:grid-cols-2 gap-4">
-                            <div>
-                                <label class="block text-xs font-bold text-gray-700 mb-2 uppercase tracking-wider">
-                                    <i class="fa fa-calendar-alt mr-1.5 text-indigo-600"></i>
-                                    From Date
-                                </label>
-                                <input
-                                    v-model="dateFrom"
-                                    @change="applyFilters"
-                                    type="date"
-                                    class="w-full rounded-lg border-2 border-gray-300 shadow-sm text-sm py-3 px-4 focus:border-blue-500 focus:ring-4 focus:ring-blue-500/20 transition-all duration-200"
-                                />
-                            </div>
-                            <div>
-                                <label class="block text-xs font-bold text-gray-700 mb-2 uppercase tracking-wider">
-                                    <i class="fa fa-calendar-alt mr-1.5 text-indigo-600"></i>
-                                    To Date
-                                </label>
-                                <input
-                                    v-model="dateTo"
-                                    @change="applyFilters"
-                                    type="date"
-                                    class="w-full rounded-lg border-2 border-gray-300 shadow-sm text-sm py-3 px-4 focus:border-blue-500 focus:ring-4 focus:ring-blue-500/20 transition-all duration-200"
-                                />
-                            </div>
-                        </div>
-
-                        <!-- Actions Row -->
-                        <div class="flex items-center justify-between pt-4 border-t-2 border-gray-100">
-                            <div class="flex items-center gap-3">
-                                <Transition
-                                    enter-active-class="transition-all duration-200"
-                                    enter-from-class="opacity-0 scale-90"
-                                    leave-active-class="transition-all duration-200"
-                                    leave-to-class="opacity-0 scale-90"
-                                >
-                                    <span v-if="hasActiveFilters" class="inline-flex items-center gap-2 px-3 py-1.5 bg-blue-50 text-blue-700 rounded-lg text-sm font-medium border-2 border-blue-200">
-                                        <i class="fa fa-filter text-blue-500"></i>
-                                        <span>Filters Active</span>
-                                    </span>
-                                </Transition>
-                                
-                                <button
-                                    v-if="hasActiveFilters"
-                                    @click="resetFilters"
-                                    class="inline-flex items-center gap-2 px-4 py-2 text-sm font-medium text-gray-700 bg-gray-100 hover:bg-gray-200 rounded-lg transition-colors duration-200"
-                                >
-                                    <i class="fa fa-times"></i>
-                                    <span>Clear All</span>
-                                </button>
-                            </div>
-
-                            <!-- Export Excel Button -->
-                            <a
-                                :href="route('admin.kyc.export', { ...filters?.filter, sort: filters?.sort })"
-                                @click="handleExport"
-                                class="inline-flex items-center gap-2.5 px-5 py-2.5 bg-gradient-to-r from-green-600 to-green-700 text-white rounded-lg shadow-md hover:shadow-xl hover:from-green-700 hover:to-green-800 transition-all duration-300 transform hover:scale-105 font-medium text-sm"
-                            >
-                                <i :class="isExporting ? 'fa fa-spinner fa-spin' : 'fa fa-file-excel'" class="text-lg"></i>
-                                <span>{{ isExporting ? 'Exporting...' : 'Export to Excel' }}</span>
-                            </a>
-                        </div>
-                    </div>
-                </div>
-            </Transition>
-
             <!-- Table Container -->
             <div class="bg-white rounded-xl shadow-lg border-2 border-gray-200 overflow-hidden">
                 <!-- Table Header -->
@@ -667,6 +517,26 @@ const handleExport = () => {
                     </div>
                 </div>
             </div>
+
+            <RightFilterSidebar
+                accent-color="#3B82F6"
+                icon="🪪"
+                label="KYC Filters"
+                :badge-count="filterBadge"
+            >
+                <!--
+                    KycFilters recebe directamente as props que o controller já envia.
+                    Quando o utilizador clica "Apply", faz router.get internamente.
+                    Quando emite badge-count, actualizamos filterBadge aqui.
+                -->
+                <KycFilters
+                    :statuses="statuses"
+                    :countries="countries"
+                    :filters="filters"
+                    route-name="admin.kyc.index"
+                    @badge-count="filterBadge = $event"
+                />
+            </RightFilterSidebar>
         </div>
     </AuthenticatedLayout>
 </template>
