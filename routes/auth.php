@@ -13,7 +13,7 @@ use Illuminate\Support\Facades\Route;
 use Inertia\Inertia;
 
 // Authentication User Routes
-Route::middleware('guest')->group(function () {
+Route::middleware('guest:web,admin')->group(function () {
     Route::get('register', [RegisteredUserController::class, 'create'])
         ->name('register');
 

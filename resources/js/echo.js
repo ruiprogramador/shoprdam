@@ -67,7 +67,7 @@ window.Echo = new Echo({
 } */
 
 /* Este funciona para http : */ window.Echo = new Echo({
-    broadcaster: 'reverb',
+    broadcaster: 'null',
     key: import.meta.env.VITE_REVERB_APP_KEY,
     wsHost: 'shoprdam.test',
     //wsPort: 8080,
