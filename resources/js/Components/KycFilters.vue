@@ -7,15 +7,18 @@
  *   - Ao "Apply" faz router.get com os filtros como query params (Spatie QueryBuilder format)
  *   - Ao "Reset" limpa tudo e navega sem filtros
  *   - Emite `badge-count` para o componente pai mostrar no trigger
+ *   - Integra KycStatsCards no topo como overview rápido + filtro por status
  *
  * Props vindas do controller (Inertia::render):
  *   - statuses  : KycStatus[] { id, name, slug }
  *   - countries : Country[]   { id, name }
  *   - filters   : os query params actuais { filter: { search, status, ... }, sort, per_page }
+ *   - stats     : { total, pending, approved, rejected, expiring_soon }
  */
 
 import { ref, computed, watch } from 'vue'
 import { router } from '@inertiajs/vue3'
+import KycStatsCards from '@/Components/KycStatsCards.vue'
 
 // ─── Types ───────────────────────────────────────────────────────────────────
 
@@ -25,14 +28,21 @@ const props = defineProps<{
     statuses:  { id: number; name: string; slug: string }[]
     countries: { id: number; name: string }[]
     filters:   Record<string, any>
-    routeName: string  // ex: 'admin.kyc.index' — permite reutilizar em sub-secções
+    routeName: string
+    stats?: {
+        total: number
+        pending: number
+        approved: number
+        rejected: number
+        expiring_soon: number
+    }
 }>()
 
 const emit = defineEmits<{
     (e: 'badge-count', n: number): void
 }>()
 
-// ─── State local (inicializado com filtros actuais da URL) ────────────────────
+// ─── State local ─────────────────────────────────────────────────────────────
 
 const search    = ref<string>(props.filters?.filter?.search     ?? '')
 const status    = ref<string>(props.filters?.filter?.status     ?? '')
@@ -65,10 +75,6 @@ watch(activeCount, (n) => emit('badge-count', n), { immediate: true })
 
 // ─── Acções ───────────────────────────────────────────────────────────────────
 
-/**
- * Navega para a mesma rota com os filtros como query params.
- * O Spatie QueryBuilder espera: ?filter[search]=...&filter[status]=...&per_page=...
- */
 const apply = () => {
     router.get(
         route(props.routeName),
@@ -109,9 +115,28 @@ const onSearchInput = () => {
     clearTimeout(searchTimer)
     searchTimer = setTimeout(apply, 400)
 }
+
+// Handler do KycStatsCards — quando se clica num pill
+const onStatFilter = (slug: string | null) => {
+    status.value = slug ?? ''
+    apply()
+}
 </script>
 
 <template>
+    <!-- ── Stats overview (só aparece se stats vier do pai) ── -->
+    <div v-if="stats" class="rsb-stats-section">
+        <p class="rsb-stats-label">Overview</p>
+        <KycStatsCards
+            :stats="stats"
+            :active-filter="status || null"
+            @filter-status="onStatFilter"
+        />
+    </div>
+
+    <!-- ── Divider ── -->
+    <div v-if="stats" class="rsb-divider" />
+
     <!-- Search -->
     <div class="rsb-field">
         <label class="rsb-field-label">
@@ -123,7 +148,7 @@ const onSearchInput = () => {
         <input
             v-model="search"
             type="text"
-            class="rsb-input"
+            class="rsb-input rsb-input--sm"
             placeholder="Name, email…"
             @input="onSearchInput"
         />
@@ -137,7 +162,7 @@ const onSearchInput = () => {
             </svg>
             Status
         </label>
-        <select v-model="status" class="rsb-select">
+        <select v-model="status" class="rsb-select rsb-input--sm">
             <option v-for="opt in statusOptions" :key="opt.value" :value="opt.value">
                 {{ opt.label }}
             </option>
@@ -152,7 +177,7 @@ const onSearchInput = () => {
             </svg>
             Country
         </label>
-        <select v-model="countryId" class="rsb-select">
+        <select v-model="countryId" class="rsb-select rsb-input--sm">
             <option v-for="opt in countryOptions" :key="opt.value" :value="opt.value">
                 {{ opt.label }}
             </option>
@@ -168,11 +193,11 @@ const onSearchInput = () => {
                 </svg>
                 From
             </label>
-            <input v-model="dateFrom" type="date" class="rsb-input" />
+            <input v-model="dateFrom" type="date" class="rsb-input rsb-input--sm" />
         </div>
         <div class="rsb-field">
             <label class="rsb-field-label">To</label>
-            <input v-model="dateTo" type="date" class="rsb-input" />
+            <input v-model="dateTo" type="date" class="rsb-input rsb-input--sm" />
         </div>
     </div>
 
@@ -208,22 +233,44 @@ const onSearchInput = () => {
 </template>
 
 <style scoped>
+/* ── Stats section ── */
+.rsb-stats-section {
+    display: flex;
+    flex-direction: column;
+    gap: 6px;
+}
+
+.rsb-stats-label {
+    font-size: 10px;
+    font-weight: 600;
+    text-transform: uppercase;
+    letter-spacing: .08em;
+    color: #9ca3af;
+    line-height: 1;
+}
+
+.rsb-divider {
+    height: 1px;
+    background: #f3f4f6;
+    margin: 0 -2px; /* leve sangria para preencher até às bordas do body */
+}
+
 /* ── Field ── */
-.rsb-field { display: flex; flex-direction: column; gap: 6px; }
+.rsb-field { display: flex; flex-direction: column; gap: 5px; }
 
 .rsb-field-label {
     display: flex;
     align-items: center;
     gap: 6px;
-    font-size: 11px;
+    font-size: 10px;
     font-weight: 600;
     text-transform: uppercase;
     letter-spacing: .06em;
     color: #6b7280;
 }
-.rsb-field-label svg { width: 13px; height: 13px; flex-shrink: 0; }
+.rsb-field-label svg { width: 12px; height: 12px; flex-shrink: 0; }
 
-.rsb-field-group { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; }
+.rsb-field-group { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; }
 
 /* ── Inputs ── */
 .rsb-input,
@@ -239,6 +286,14 @@ const onSearchInput = () => {
     outline: none;
     appearance: none;
 }
+
+/* Variante compacta — usada em todos os campos deste painel */
+.rsb-input--sm {
+    padding: 5px 9px;
+    font-size: 12px;
+    border-radius: 7px;
+}
+
 .rsb-input:focus,
 .rsb-select:focus {
     border-color: var(--accent, #3B82F6);
@@ -252,15 +307,15 @@ const onSearchInput = () => {
 }
 .rsb-per-page-btn {
     flex: 1;
-    padding: 6px 4px;
+    padding: 5px 4px;
     border: 1.5px solid #e5e7eb;
     border-radius: 7px;
-    font-size: 12px; font-weight: 600;
+    font-size: 11px; font-weight: 600;
     color: #6b7280;
     background: white;
     cursor: pointer;
     transition: all .15s;
-    min-width: 40px;
+    min-width: 36px;
 }
 .rsb-per-page-btn:hover { border-color: #9ca3af; color: #374151; }
 .rsb-per-page-btn--active {
@@ -277,10 +332,10 @@ const onSearchInput = () => {
     margin-top: 4px;
 }
 .rsb-btn-reset {
-    padding: 9px;
+    padding: 7px;
     border: 1.5px solid #e5e7eb;
     border-radius: 8px;
-    font-size: 13px; font-weight: 600;
+    font-size: 12px; font-weight: 600;
     color: #6b7280;
     background: white;
     cursor: pointer;
@@ -290,10 +345,10 @@ const onSearchInput = () => {
 .rsb-btn-reset:disabled { opacity: .4; cursor: default; }
 
 .rsb-btn-apply {
-    padding: 9px;
+    padding: 7px;
     border: none;
     border-radius: 8px;
-    font-size: 13px; font-weight: 700;
+    font-size: 12px; font-weight: 700;
     color: white;
     background: var(--accent, #3B82F6);
     cursor: pointer;
