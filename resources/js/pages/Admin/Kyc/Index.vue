@@ -6,20 +6,14 @@ import { useKycStatus } from '@/Composables/useKycStatus'
 import { useFormatDate } from '@/Composables/useFormatDate'
 import SearchableSelect from '@/Components/SearchableSelect.vue'
 import RightFilterSidebar from '@/Components/RightFilterSidebar.vue'
-import KycFilters from '@/Components/KycFilters.vue'
+import FiltersPanel from '@/Components/FiltersPanel.vue'
+import type { StatCard, FilterField } from '@/types/filters'
 
 const props = defineProps<{
-    kycs: any
-    stats: {
-        total: number
-        pending: number
-        approved: number
-        rejected: number
-        expiring_soon: number
-    }
-    statuses: { id: number; name: string; slug: string }[]
-    countries: { id: number; name: string }[]
-    filters: Record<string, any>
+    kycs:          any
+    stats_cards:   StatCard[]
+    filter_fields: FilterField[]
+    filters:       Record<string, any>
 }>()
 
 const { statusColor } = useKycStatus()
@@ -344,11 +338,10 @@ const handleExport = () => {
                     Quando o utilizador clica "Apply", faz router.get internamente.
                     Quando emite badge-count, actualizamos filterBadge aqui.
                 -->
-                <KycFilters
-                    :statuses="statuses"
-                    :countries="countries"
+                <FiltersPanel
+                    :fields="filter_fields"
                     :filters="filters"
-                    :stats="stats"
+                    :stats-cards="stats_cards"
                     route-name="admin.kyc.index"
                     @badge-count="filterBadge = $event"
                 />
