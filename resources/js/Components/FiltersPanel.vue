@@ -2,20 +2,21 @@
 import { ref, computed, watch } from 'vue'
 import { router } from '@inertiajs/vue3'
 import StatsCards from '@/Components/StatsCards.vue'
-import type { StatCard, FilterField } from '@/types/filters'
+import ExportActions from '@/Components/ExportActions.vue'
+import type { StatCard, FilterField, ExportAction } from '@/types/filters'
 
 const props = defineProps<{
-    fields:      FilterField[]
-    filters:     Record<string, any>
-    routeName:   string
-    statsCards?: StatCard[]
+    fields:          FilterField[]
+    filters:         Record<string, any>
+    routeName:       string
+    statsCards?:     StatCard[]
+    exportActions?:  ExportAction[]
 }>()
 
 const emit = defineEmits<{
     (e: 'badge-count', n: number): void
 }>()
 
-// Build state dynamically from field definitions
 const buildInitialState = (): Record<string, string> => {
     const state: Record<string, string> = {}
     for (const field of props.fields) {
@@ -27,9 +28,9 @@ const buildInitialState = (): Record<string, string> => {
     return state
 }
 
-const values   = ref<Record<string, string>>(buildInitialState())
-const perPage  = ref<number>(Number(props.filters?.per_page) || 10)
-const sort     = ref<string>(props.filters?.sort ?? '')
+const values  = ref<Record<string, string>>(buildInitialState())
+const perPage = ref<number>(Number(props.filters?.per_page) || 10)
+const sort    = ref<string>(props.filters?.sort ?? '')
 
 const activeCount = computed(() => Object.values(values.value).filter(Boolean).length)
 watch(activeCount, (n) => emit('badge-count', n), { immediate: true })
@@ -160,7 +161,7 @@ const onStatFilter = (slug: string | null) => {
         </div>
     </div>
 
-    <!-- Actions -->
+    <!-- Apply / Reset -->
     <div class="fp-actions">
         <button class="fp-btn-reset" :disabled="!activeCount && perPage === 10" @click="reset">
             Reset
@@ -169,6 +170,12 @@ const onStatFilter = (slug: string | null) => {
             Apply filters
         </button>
     </div>
+
+    <!-- Export Actions (opcional — só aparece se o backend mandar export_actions) -->
+    <template v-if="exportActions?.length">
+        <div class="fp-divider" />
+        <ExportActions :actions="exportActions" :filters="filters" />
+    </template>
 </template>
 
 <style scoped>

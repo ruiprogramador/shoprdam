@@ -152,11 +152,34 @@ class KycController extends Controller
             ],
         ];
 
+        // Export actions (para mostrar opções de exportação no painel, como Excel, CSV, etc.)
+        $exportActions = [
+            [
+                'label'  => 'Excel',
+                'icon'   => '📊',
+                'format' => 'xlsx',
+                'route'  => 'admin.kyc.export',
+            ],
+            [
+                'label'  => 'CSV',
+                'icon'   => '📄',
+                'format' => 'csv',
+                'route'  => 'admin.kyc.export',
+            ],
+            [
+                'label'  => 'Print',
+                'icon'   => '🖨️',
+                'format' => 'print',
+                'route'  => 'admin.kyc.print',
+            ],
+        ];
+
         return Inertia::render('Admin/Kyc/Index', [
             'kycs'          => KycResource::collection($kycs)->resolve(),
             'stats_cards'   => $statsCards,
             'filter_fields' => $filterFields,
             'filters'       => request()->only(['filter', 'sort', 'per_page']),
+            'export_actions' => $exportActions,
         ]);
     }
 
@@ -206,10 +229,51 @@ class KycController extends Controller
 
     public function export(): BinaryFileResponse
     {
-        $filters  = request()->only(['status', 'search', 'country_id', 'date_from', 'date_to']);
-        $filename = 'kyc-export-' . now()->format('Y-m-d-His') . '.xlsx';
+        // $filters  = request()->only(['status', 'search', 'country_id', 'date_from', 'date_to']);
+        $filters = request()->input('filter', []);
+        $format   = request()->input('format', 'xlsx');
+        $filename = 'kyc-export-' . now()->format('Y-m-d-His') . "." . $format;
 
-        return Excel::download(new KycExport($filters), $filename);
+        $writerType = match ($format) {
+            'csv'   => \Maatwebsite\Excel\Excel::CSV,
+            default => \Maatwebsite\Excel\Excel::XLSX,
+        };
+ 
+        return Excel::download(new KycExport($filters), $filename, $writerType);
+    }
+
+    public function print(): \Illuminate\Http\Response
+    {
+        $kycs = QueryBuilder::for(Kyc::class)
+            ->with(['kycStatus', 'user', 'country'])
+            ->allowedFilters(
+                AllowedFilter::callback('search', function ($query, $value) {
+                    $query->where(function ($q) use ($value) {
+                        $q->where('full_name', 'like', "%{$value}%")
+                            ->orWhereHas('user', fn ($q) =>
+                                $q->where('name', 'like', "%{$value}%")
+                                    ->orWhere('email', 'like', "%{$value}%")
+                            );
+                    });
+                }),
+                AllowedFilter::callback('status', fn ($query, $value) =>
+                    $query->whereHas('kycStatus', fn ($q) => $q->where('slug', $value))
+                ),
+                AllowedFilter::exact('country_id'),
+                AllowedFilter::callback('date_from', fn ($q, $v) =>
+                    $q->whereDate('created_at', '>=', $v)
+                ),
+                AllowedFilter::callback('date_to', fn ($q, $v) =>
+                    $q->whereDate('created_at', '<=', $v)
+                ),
+            )
+            ->defaultSort('-created_at')
+            ->get();
+ 
+        return response()->view('admin.kyc.print', [
+            'kycs'       => KycResource::collection($kycs)->resolve(),
+            'printed_at' => now()->format('d/m/Y H:i'),
+        ]);
     }
 
     private function authorizeAdmin(string $ability, Kyc $kyc): void

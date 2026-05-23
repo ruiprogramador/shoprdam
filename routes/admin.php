@@ -83,6 +83,7 @@ Route::middleware('auth:admin')
         // Admin KYC Management Routes
         Route::prefix('kyc')->name('kyc.')->group(function () {
             Route::get('/export', [KycController::class, 'export'])->name('export');
+            Route::get('/print', [KycController::class, 'print'])->name('print');
             Route::get('/', [KycController::class, 'index'])->name('index');
             Route::get('/{kyc}', [KycController::class, 'show'])->name('show');
             Route::post('/{kyc}/review', [KycController::class, 'review'])->name('review');

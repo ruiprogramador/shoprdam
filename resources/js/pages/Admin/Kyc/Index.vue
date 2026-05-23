@@ -7,13 +7,14 @@ import { useFormatDate } from '@/Composables/useFormatDate'
 import SearchableSelect from '@/Components/SearchableSelect.vue'
 import RightFilterSidebar from '@/Components/RightFilterSidebar.vue'
 import FiltersPanel from '@/Components/FiltersPanel.vue'
-import type { StatCard, FilterField } from '@/types/filters'
+import type { StatCard, FilterField, ExportAction } from '@/types/filters'
 
 const props = defineProps<{
     kycs:          any
     stats_cards:   StatCard[]
     filter_fields: FilterField[]
     filters:       Record<string, any>
+    export_actions: ExportAction[]
 }>()
 
 const { statusColor } = useKycStatus()
@@ -342,6 +343,7 @@ const handleExport = () => {
                     :fields="filter_fields"
                     :filters="filters"
                     :stats-cards="stats_cards"
+                    :export-actions="export_actions"
                     route-name="admin.kyc.index"
                     @badge-count="filterBadge = $event"
                 />

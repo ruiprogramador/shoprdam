@@ -27,3 +27,10 @@ export interface FilterField {
     options?:     FilterOption[] // só em select
     icon?:        string        // SVG path d="..." string
 }
+
+export interface ExportAction {
+    label:   string              // ex: "Excel", "CSV", "Print"
+    icon:    string              // emoji ou SVG path d="..."
+    format:  'xlsx' | 'csv' | 'print'
+    route?:  string              // route name Laravel — omitir em format:'print'
+}
