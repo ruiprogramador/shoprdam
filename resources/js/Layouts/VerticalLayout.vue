@@ -1,9 +1,10 @@
 <script setup>
-import { ref, onMounted, onUnmounted } from 'vue'
+import { ref, provide, onMounted, onUnmounted } from 'vue'
 import { usePage }    from '@inertiajs/vue3'
 import Sidebar        from '@/Components/Sidebar.vue'
 import HeaderNavbar   from '@/Components/HeaderNavbar.vue'
 import VerticalMenu   from '@/Components/VerticalMenu.vue'
+import { LAYOUT_STATE_KEY } from '@/Composables/useLayoutState'
 
 const BREAKPOINT = 1024
 
@@ -46,6 +47,15 @@ onMounted(() => {
 })
 
 onUnmounted(() => window.removeEventListener('resize', updateByWidth))
+
+const closeSidebar = () => { sidebarOpen.value = false }
+
+provide(LAYOUT_STATE_KEY, {
+    sidebarOpen,
+    isMobile,
+    closeSidebar,
+    toggleSidebar,
+})
 </script>
 
 <template>

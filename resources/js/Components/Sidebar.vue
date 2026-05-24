@@ -1,5 +1,6 @@
 <script setup>
 import ApplicationLogo from '@/Components/ApplicationLogo.vue'
+import SecondaryButton from '@/Components/SecondaryButton.vue'
 
 defineProps({
     open:     { type: Boolean, default: true  },
