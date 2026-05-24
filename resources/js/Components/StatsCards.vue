@@ -41,25 +41,3 @@ const handleClick = (card: StatCard) => emit('filter', isActive(card) ? null : c
         </button>
     </div>
 </template>
-
-<style scoped>
-.sc-strip { display: flex; flex-wrap: wrap; gap: 6px; }
-
-.sc-pill {
-    display: inline-flex;
-    align-items: center;
-    gap: 5px;
-    padding: 4px 10px 4px 7px;
-    border-radius: 999px;
-    cursor: pointer;
-    transition: all .15s ease;
-    white-space: nowrap;
-    font-family: inherit;
-    line-height: 1;
-}
-.sc-pill:focus-visible { outline: 2px solid currentColor; outline-offset: 2px; }
-
-.sc-icon  { font-size: 13px; line-height: 1; }
-.sc-value { font-size: 13px; font-weight: 700; letter-spacing: -0.02em; }
-.sc-label { font-size: 11px; font-weight: 600; opacity: 0.85; }
-</style>
