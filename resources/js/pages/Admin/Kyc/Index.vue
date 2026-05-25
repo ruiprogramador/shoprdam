@@ -1,19 +1,18 @@
 <script setup lang="ts">
-import { ref, computed } from 'vue'
+import { ref } from 'vue'
 import { Link, router } from '@inertiajs/vue3'
 import AuthenticatedLayout from '@/Layouts/AuthenticatedLayout.vue'
 import { useKycStatus } from '@/Composables/useKycStatus'
 import { useFormatDate } from '@/Composables/useFormatDate'
-import SearchableSelect from '@/Components/SearchableSelect.vue'
 import RightFilterSidebar from '@/Components/RightFilterSidebar.vue'
 import FiltersPanel from '@/Components/FiltersPanel.vue'
 import type { StatCard, FilterField, ExportAction } from '@/types/filters'
 
 const props = defineProps<{
-    kycs:          any
-    stats_cards:   StatCard[]
-    filter_fields: FilterField[]
-    filters:       Record<string, any>
+    kycs:           any
+    stats_cards:    StatCard[]
+    filter_fields:  FilterField[]
+    filters:        Record<string, any>
     export_actions: ExportAction[]
 }>()
 
@@ -21,250 +20,199 @@ const { statusColor } = useKycStatus()
 const { formatDate, formatDateTime } = useFormatDate()
 
 const filterBadge = ref(0)
-const perPage = ref(props.filters?.per_page ?? 10)
 const sort = ref(props.filters?.sort ?? '-created_at')
 
-const showFilters = ref(true)
-const isExporting = ref(false)
-let searchTimeout: ReturnType<typeof setTimeout>
-
-// Format numbers with locale
 const formatNumber = (num: number) => num?.toLocaleString() || '0'
 
 const getSortState = (field: string) => {
-    if (sort.value === field) return 'asc'
-    if (sort.value === `-${field}`) return 'desc'
+    if (sort.value === field)        return 'asc'
+    if (sort.value === `-${field}`)  return 'desc'
     return null
 }
 
-const getStatusIcon = (slug: string) => {
-    const icons: Record<string, string> = {
-        'pending': '⏳',
-        'approved': '✅',
-        'rejected': '❌',
-        'under_review': '🔍',
-        'expired': '⚠️'
-    }
-    return icons[slug] || '📄'
-}
-
-const handleExport = () => {
-    isExporting.value = true
-    setTimeout(() => {
-        isExporting.value = false
-    }, 2000)
+const toggleSort = (field: string) => {
+    sort.value = getSortState(field) === 'asc' ? `-${field}` : field
+    router.get(route('admin.kyc.index'), { ...props.filters, sort: sort.value }, { preserveState: true, replace: true })
 }
 </script>
 
 <template>
     <AuthenticatedLayout>
         <template #header>
-            <div class="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-4">
+            <div class="flex items-center justify-between">
                 <div>
-                    <h2 class="text-2xl font-bold text-gray-900 tracking-tight">
-                        KYC Management
-                    </h2>
-                    <p class="mt-1 text-sm text-gray-600">
-                        Manage and review vendor verification documents
-                    </p>
+                    <p class="text-[10px] font-semibold uppercase tracking-widest text-gray-400 mb-0.5">Admin</p>
+                    <h2 class="text-base font-bold text-gray-900 leading-tight">KYC Submissions</h2>
                 </div>
-                <div class="flex items-center gap-3">
-                    <button
-                        @click="showFilters = !showFilters"
-                        class="inline-flex items-center gap-2 px-4 py-2.5 text-sm font-medium text-gray-700 bg-white border border-gray-300 rounded-lg shadow-sm hover:bg-gray-50 hover:border-gray-400 transition-all duration-200 focus:outline-none focus:ring-2 focus:ring-blue-500 focus:ring-offset-2"
-                    >
-                        <i :class="showFilters ? 'fa fa-eye-slash' : 'fa fa-filter'"></i>
-                        <span>{{ showFilters ? 'Hide' : 'Show' }} Filters</span>
-                    </button>
-                </div>
+                <span class="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full text-xs font-bold bg-blue-50 text-blue-700 border border-blue-100">
+                    <i class="fa fa-database text-[9px]"></i>
+                    {{ formatNumber(kycs.meta?.total || kycs.length || 0) }} Total
+                </span>
             </div>
         </template>
 
-        <div class="py-8 px-4 sm:px-6 lg:px-8 max-w-7xl mx-auto space-y-6">
-
-            <!-- Table Container -->
-            <div class="bg-white rounded-xl shadow-lg border-2 border-gray-200 overflow-hidden">
-                <!-- Table Header -->
-                <div class="px-6 py-4 border-b-2 border-gray-200 bg-gradient-to-r from-gray-50 to-gray-100">
-                    <div class="flex items-center justify-between">
-                        <div class="flex items-center gap-3">
-                            <h3 class="text-lg font-bold text-gray-900">
-                                KYC Submissions
-                            </h3>
-                            <span class="inline-flex items-center gap-1.5 px-3 py-1 rounded-full text-xs font-bold bg-blue-100 text-blue-800 border-2 border-blue-200">
-                                <i class="fa fa-database"></i>
-                                <span>{{ formatNumber(kycs.meta?.total || kycs.length || 0) }} Total</span>
-                            </span>
-                        </div>
-                        <div v-if="kycs.meta" class="text-sm text-gray-600 font-medium">
-                            <span class="text-gray-500">Showing</span>
-                            <span class="font-bold text-gray-900">{{ formatNumber(kycs.meta.from || 0) }}</span>
-                            <span class="text-gray-500">-</span>
-                            <span class="font-bold text-gray-900">{{ formatNumber(kycs.meta.to || 0) }}</span>
-                        </div>
-                    </div>
-                </div>
+        <div class="py-6 px-4 sm:px-6 max-w-7xl mx-auto">
+            <div class="bg-white rounded-xl shadow-sm border border-gray-200 overflow-hidden">
 
                 <!-- Table -->
                 <div class="overflow-x-auto">
-                    <table class="min-w-full divide-y-2 divide-gray-200">
-                        <thead class="bg-gradient-to-r from-gray-100 to-gray-50">
+                    <table class="min-w-full divide-y divide-gray-100">
+                        <thead class="bg-gray-50/80">
                             <tr>
-                                <th scope="col" class="px-6 py-4 text-left text-xs font-bold text-gray-700 uppercase tracking-wider">
-                                    <div class="flex items-center gap-2">
-                                        <i class="fa fa-user text-blue-600"></i>
-                                        <span>Vendor Info</span>
+                                <!-- Vendor -->
+                                <th scope="col" class="px-4 py-3 text-left text-[10px] font-bold text-gray-400 uppercase tracking-wider">
+                                    <div class="flex items-center gap-1.5">
+                                        <i class="fa fa-user text-gray-300"></i>
+                                        Vendor Info
                                     </div>
                                 </th>
+
+                                <!-- Full Name -->
                                 <th
                                     scope="col"
-                                    class="px-6 py-4 text-left text-xs font-bold text-gray-700 uppercase tracking-wider cursor-pointer hover:bg-gray-200/70 transition-colors select-none group"
+                                    class="px-4 py-3 text-left text-[10px] font-bold text-gray-400 uppercase tracking-wider cursor-pointer hover:text-gray-600 transition-colors select-none group"
                                     @click="toggleSort('full_name')"
                                 >
-                                    <div class="flex items-center gap-2">
-                                        <i class="fa fa-id-card text-purple-600"></i>
-                                        <span>Full Name</span>
-                                        <div class="flex flex-col text-gray-400 group-hover:text-gray-600">
-                                            <i :class="['fa fa-caret-up text-xs -mb-1', getSortState('full_name') === 'asc' && 'text-blue-600']"></i>
-                                            <i :class="['fa fa-caret-down text-xs', getSortState('full_name') === 'desc' && 'text-blue-600']"></i>
-                                        </div>
+                                    <div class="flex items-center gap-1.5">
+                                        Full Name
+                                        <span class="flex flex-col leading-[0]">
+                                            <i :class="['fa fa-caret-up text-[9px]', getSortState('full_name') === 'asc' ? 'text-blue-500' : 'text-gray-300']"></i>
+                                            <i :class="['fa fa-caret-down text-[9px]', getSortState('full_name') === 'desc' ? 'text-blue-500' : 'text-gray-300']"></i>
+                                        </span>
                                     </div>
                                 </th>
-                                <th scope="col" class="px-6 py-4 text-left text-xs font-bold text-gray-700 uppercase tracking-wider">
-                                    <div class="flex items-center gap-2">
-                                        <i class="fa fa-globe text-green-600"></i>
-                                        <span>Location</span>
-                                    </div>
+
+                                <!-- Location -->
+                                <th scope="col" class="px-4 py-3 text-left text-[10px] font-bold text-gray-400 uppercase tracking-wider">
+                                    Location
                                 </th>
-                                <th scope="col" class="px-6 py-4 text-left text-xs font-bold text-gray-700 uppercase tracking-wider">
-                                    <div class="flex items-center gap-2">
-                                        <i class="fa fa-flag text-yellow-600"></i>
-                                        <span>Status</span>
-                                    </div>
+
+                                <!-- Status -->
+                                <th scope="col" class="px-4 py-3 text-left text-[10px] font-bold text-gray-400 uppercase tracking-wider">
+                                    Status
                                 </th>
+
+                                <!-- Submitted -->
                                 <th
                                     scope="col"
-                                    class="px-6 py-4 text-left text-xs font-bold text-gray-700 uppercase tracking-wider cursor-pointer hover:bg-gray-200/70 transition-colors select-none group"
+                                    class="px-4 py-3 text-left text-[10px] font-bold text-gray-400 uppercase tracking-wider cursor-pointer hover:text-gray-600 transition-colors select-none group"
                                     @click="toggleSort('created_at')"
                                 >
-                                    <div class="flex items-center gap-2">
-                                        <i class="fa fa-calendar-plus text-indigo-600"></i>
-                                        <span>Submitted</span>
-                                        <div class="flex flex-col text-gray-400 group-hover:text-gray-600">
-                                            <i :class="['fa fa-caret-up text-xs -mb-1', getSortState('created_at') === 'asc' && 'text-blue-600']"></i>
-                                            <i :class="['fa fa-caret-down text-xs', getSortState('created_at') === 'desc' && 'text-blue-600']"></i>
-                                        </div>
+                                    <div class="flex items-center gap-1.5">
+                                        Submitted
+                                        <span class="flex flex-col leading-[0]">
+                                            <i :class="['fa fa-caret-up text-[9px]', getSortState('created_at') === 'asc' ? 'text-blue-500' : 'text-gray-300']"></i>
+                                            <i :class="['fa fa-caret-down text-[9px]', getSortState('created_at') === 'desc' ? 'text-blue-500' : 'text-gray-300']"></i>
+                                        </span>
                                     </div>
                                 </th>
+
+                                <!-- Expiry -->
                                 <th
                                     scope="col"
-                                    class="px-6 py-4 text-left text-xs font-bold text-gray-700 uppercase tracking-wider cursor-pointer hover:bg-gray-200/70 transition-colors select-none group"
+                                    class="px-4 py-3 text-left text-[10px] font-bold text-gray-400 uppercase tracking-wider cursor-pointer hover:text-gray-600 transition-colors select-none group"
                                     @click="toggleSort('expires_at')"
                                 >
-                                    <div class="flex items-center gap-2">
-                                        <i class="fa fa-calendar-times text-red-600"></i>
-                                        <span>Expiry</span>
-                                        <div class="flex flex-col text-gray-400 group-hover:text-gray-600">
-                                            <i :class="['fa fa-caret-up text-xs -mb-1', getSortState('expires_at') === 'asc' && 'text-blue-600']"></i>
-                                            <i :class="['fa fa-caret-down text-xs', getSortState('expires_at') === 'desc' && 'text-blue-600']"></i>
-                                        </div>
+                                    <div class="flex items-center gap-1.5">
+                                        Expiry
+                                        <span class="flex flex-col leading-[0]">
+                                            <i :class="['fa fa-caret-up text-[9px]', getSortState('expires_at') === 'asc' ? 'text-blue-500' : 'text-gray-300']"></i>
+                                            <i :class="['fa fa-caret-down text-[9px]', getSortState('expires_at') === 'desc' ? 'text-blue-500' : 'text-gray-300']"></i>
+                                        </span>
                                     </div>
                                 </th>
-                                <th scope="col" class="relative px-6 py-4">
+
+                                <th scope="col" class="relative px-4 py-3">
                                     <span class="sr-only">Actions</span>
                                 </th>
                             </tr>
                         </thead>
-                        <tbody class="bg-white divide-y divide-gray-100">
+
+                        <tbody class="bg-white divide-y divide-gray-50">
+
+                            <!-- Empty State -->
+                            <tr v-if="!kycs?.length">
+                                <td colspan="7" class="px-4 py-16 text-center">
+                                    <div class="flex flex-col items-center gap-3">
+                                        <div class="w-12 h-12 rounded-xl bg-gray-100 flex items-center justify-center">
+                                            <i class="fa fa-inbox text-xl text-gray-300"></i>
+                                        </div>
+                                        <div>
+                                            <p class="text-sm font-semibold text-gray-700">No KYC submissions found</p>
+                                            <p class="text-xs text-gray-400 mt-0.5">Try adjusting your filters</p>
+                                        </div>
+                                    </div>
+                                </td>
+                            </tr>
+
                             <tr
                                 v-for="kyc in kycs"
                                 :key="kyc.id"
-                                class="hover:bg-blue-50/50 transition-all duration-200 group"
+                                class="hover:bg-gray-50/60 transition-colors group"
                             >
                                 <!-- Vendor Info -->
-                                <td class="px-6 py-4 whitespace-nowrap">
-                                    <div class="flex items-center gap-3">
-                                        <div class="flex-shrink-0 h-11 w-11 rounded-xl bg-gradient-to-br from-blue-500 to-blue-700 flex items-center justify-center text-white font-bold text-base shadow-md group-hover:shadow-lg transition-shadow">
+                                <td class="px-4 py-3 whitespace-nowrap">
+                                    <div class="flex items-center gap-2.5">
+                                        <div class="flex-shrink-0 h-9 w-9 rounded-lg bg-blue-600 flex items-center justify-center text-white font-bold text-sm">
                                             {{ kyc.user?.name?.charAt(0)?.toUpperCase() || '?' }}
                                         </div>
                                         <div>
-                                            <div class="text-sm font-semibold text-gray-900">
-                                                {{ kyc.user?.name || 'N/A' }}
-                                            </div>
-                                            <div class="text-xs text-gray-500 flex items-center gap-1">
-                                                <i class="fa fa-envelope text-gray-400"></i>
-                                                {{ kyc.user?.email || 'No email' }}
+                                            <div class="text-sm font-semibold text-gray-900">{{ kyc.user?.name || 'N/A' }}</div>
+                                            <div class="text-xs text-gray-400 flex items-center gap-1">
+                                                <i class="fa fa-envelope text-gray-300"></i>
+                                                {{ kyc.user?.email || '—' }}
                                             </div>
                                         </div>
                                     </div>
                                 </td>
 
                                 <!-- Full Name -->
-                                <td class="px-6 py-4 whitespace-nowrap">
-                                    <div class="text-sm font-medium text-gray-900">
-                                        {{ kyc.full_name || '—' }}
-                                    </div>
+                                <td class="px-4 py-3 whitespace-nowrap">
+                                    <span class="text-sm text-gray-700">{{ kyc.full_name || '—' }}</span>
                                 </td>
 
-                                <!-- Country -->
-                                <td class="px-6 py-4 whitespace-nowrap">
-                                    <div class="flex items-center gap-2 text-sm text-gray-700">
-                                        <i class="fa fa-map-marker-alt text-gray-400"></i>
-                                        <span class="font-medium">{{ kyc.country?.name || '—' }}</span>
+                                <!-- Location -->
+                                <td class="px-4 py-3 whitespace-nowrap">
+                                    <div class="flex items-center gap-1.5 text-sm text-gray-600">
+                                        <i class="fa fa-map-marker-alt text-gray-300"></i>
+                                        {{ kyc.country?.name || '—' }}
                                     </div>
                                 </td>
 
                                 <!-- Status -->
-                                <td class="px-6 py-4 whitespace-nowrap">
+                                <td class="px-4 py-3 whitespace-nowrap">
                                     <span
-                                        class="inline-flex items-center gap-2 px-3 py-1.5 rounded-lg text-xs font-bold shadow-sm border-2"
+                                        class="inline-flex items-center gap-1.5 px-2 py-0.5 rounded-md text-xs font-semibold border"
                                         :class="statusColor(kyc.status?.slug)"
                                     >
-                                        <span class="text-base">{{ getStatusIcon(kyc.status?.slug) }}</span>
-                                        <span>{{ kyc.status?.name || 'Unknown' }}</span>
+                                        {{ kyc.status?.name || 'Unknown' }}
                                     </span>
                                 </td>
 
                                 <!-- Submitted -->
-                                <td class="px-6 py-4 whitespace-nowrap">
-                                    <div class="flex items-center gap-2 text-sm text-gray-700">
-                                        <i class="fa fa-clock text-gray-400"></i>
-                                        <span class="font-medium">{{ formatDateTime(kyc.created_at) }}</span>
+                                <td class="px-4 py-3 whitespace-nowrap">
+                                    <div class="flex items-center gap-1.5 text-sm text-gray-500">
+                                        <i class="fa fa-clock text-gray-300"></i>
+                                        <span class="tabular-nums">{{ formatDateTime(kyc.created_at) }}</span>
                                     </div>
                                 </td>
 
                                 <!-- Expiry -->
-                                <td class="px-6 py-4 whitespace-nowrap">
-                                    <div class="flex items-center gap-2 text-sm text-gray-700">
-                                        <i class="fa fa-hourglass-half text-gray-400"></i>
-                                        <span class="font-medium">{{ formatDate(kyc.expires_at) }}</span>
+                                <td class="px-4 py-3 whitespace-nowrap">
+                                    <div class="flex items-center gap-1.5 text-sm text-gray-500">
+                                        <i class="fa fa-hourglass-half text-gray-300"></i>
+                                        <span class="tabular-nums">{{ formatDate(kyc.expires_at) || '—' }}</span>
                                     </div>
                                 </td>
 
                                 <!-- Actions -->
-                                <td class="px-6 py-4 whitespace-nowrap text-right text-sm font-medium">
+                                <td class="px-4 py-3 whitespace-nowrap text-right">
                                     <Link
                                         :href="route('admin.kyc.show', kyc.id)"
-                                        class="inline-flex items-center gap-2 px-4 py-2 text-sm font-semibold text-blue-600 hover:text-white bg-blue-50 hover:bg-blue-600 border-2 border-blue-200 hover:border-blue-600 rounded-lg transition-all duration-200 shadow-sm hover:shadow-md"
+                                        class="inline-flex items-center gap-1.5 px-3 py-1.5 text-xs font-semibold text-blue-600 hover:text-white bg-transparent hover:bg-blue-600 border border-blue-200 hover:border-blue-600 rounded-lg transition-all duration-150"
                                     >
-                                        <span>View Details</span>
-                                        <i class="fa fa-arrow-right text-xs"></i>
+                                        View <i class="fa fa-arrow-right text-[10px]"></i>
                                     </Link>
-                                </td>
-                            </tr>
-
-                            <!-- Empty State -->
-                            <tr v-if="!kycs?.length">
-                                <td colspan="7" class="px-6 py-20 text-center">
-                                    <div class="flex flex-col items-center gap-4">
-                                        <div class="w-20 h-20 rounded-2xl bg-gradient-to-br from-gray-100 to-gray-200 flex items-center justify-center shadow-inner">
-                                            <i class="fa fa-inbox text-4xl text-gray-400"></i>
-                                        </div>
-                                        <div>
-                                            <p class="text-base font-semibold text-gray-900">No KYC submissions found</p>
-                                            <p class="text-sm text-gray-500 mt-1">Try adjusting your filters or search criteria</p>
-                                        </div>
-                                    </div>
                                 </td>
                             </tr>
                         </tbody>
@@ -272,82 +220,51 @@ const handleExport = () => {
                 </div>
 
                 <!-- Pagination -->
-                <div v-if="kycs.meta?.last_page > 1" class="px-6 py-4 border-t-2 border-gray-200 bg-gradient-to-r from-gray-50 to-gray-100">
-                    <div class="flex items-center justify-between">
-                        <div class="flex-1 flex justify-between sm:hidden">
-                            <Link
-                                v-if="kycs.links?.prev"
-                                :href="kycs.links.prev"
-                                class="relative inline-flex items-center px-4 py-2 border-2 border-gray-300 text-sm font-medium rounded-lg text-gray-700 bg-white hover:bg-gray-50 transition-colors"
-                            >
-                                Previous
-                            </Link>
-                            <Link
-                                v-if="kycs.links?.next"
-                                :href="kycs.links.next"
-                                class="ml-3 relative inline-flex items-center px-4 py-2 border-2 border-gray-300 text-sm font-medium rounded-lg text-gray-700 bg-white hover:bg-gray-50 transition-colors"
-                            >
-                                Next
-                            </Link>
-                        </div>
-                        <div class="hidden sm:flex-1 sm:flex sm:items-center sm:justify-between">
-                            <div>
-                                <p class="text-sm text-gray-700 font-medium">
-                                    Showing
-                                    <span class="font-bold text-gray-900">{{ formatNumber(kycs.meta.from || 0) }}</span>
-                                    to
-                                    <span class="font-bold text-gray-900">{{ formatNumber(kycs.meta.to || 0) }}</span>
-                                    of
-                                    <span class="font-bold text-gray-900">{{ formatNumber(kycs.meta.total || 0) }}</span>
-                                    results
-                                </p>
-                            </div>
-                            <div>
-                                <nav class="relative z-0 inline-flex rounded-lg shadow-sm -space-x-px" aria-label="Pagination">
-                                    <Link
-                                        v-if="kycs.links?.prev"
-                                        :href="kycs.links.prev"
-                                        class="relative inline-flex items-center px-3 py-2 rounded-l-lg border-2 border-gray-300 bg-white text-sm font-medium text-gray-500 hover:bg-gray-50 hover:text-gray-700 transition-colors"
-                                    >
-                                        <i class="fa fa-chevron-left"></i>
-                                    </Link>
-                                    <span class="relative inline-flex items-center px-4 py-2 border-2 border-gray-300 bg-white text-sm font-bold text-gray-700">
-                                        Page {{ kycs.meta.current_page }} of {{ kycs.meta.last_page }}
-                                    </span>
-                                    <Link
-                                        v-if="kycs.links?.next"
-                                        :href="kycs.links.next"
-                                        class="relative inline-flex items-center px-3 py-2 rounded-r-lg border-2 border-gray-300 bg-white text-sm font-medium text-gray-500 hover:bg-gray-50 hover:text-gray-700 transition-colors"
-                                    >
-                                        <i class="fa fa-chevron-right"></i>
-                                    </Link>
-                                </nav>
-                            </div>
-                        </div>
-                    </div>
+                <div v-if="kycs.meta?.last_page > 1" class="px-4 py-3 border-t border-gray-100 flex items-center justify-between gap-4 bg-gray-50/50">
+                    <p class="text-xs text-gray-400">
+                        Showing
+                        <span class="font-semibold text-gray-600">{{ formatNumber(kycs.meta.from || 0) }}–{{ formatNumber(kycs.meta.to || 0) }}</span>
+                        of <span class="font-semibold text-gray-600">{{ formatNumber(kycs.meta.total || 0) }}</span>
+                    </p>
+                    <nav class="flex items-center gap-1">
+                        <Link
+                            v-if="kycs.links?.prev"
+                            :href="kycs.links.prev"
+                            class="w-7 h-7 flex items-center justify-center rounded-md border border-gray-200 text-gray-500 hover:bg-gray-100 text-xs transition-colors"
+                        >
+                            <i class="fa fa-chevron-left"></i>
+                        </Link>
+                        <span class="px-2.5 py-1 text-xs font-medium text-gray-600 bg-white border border-gray-200 rounded-md tabular-nums">
+                            {{ kycs.meta.current_page }} / {{ kycs.meta.last_page }}
+                        </span>
+                        <Link
+                            v-if="kycs.links?.next"
+                            :href="kycs.links.next"
+                            class="w-7 h-7 flex items-center justify-center rounded-md border border-gray-200 text-gray-500 hover:bg-gray-100 text-xs transition-colors"
+                        >
+                            <i class="fa fa-chevron-right"></i>
+                        </Link>
+                    </nav>
                 </div>
-            </div>
 
-            <RightFilterSidebar
-                accent-color="#3B82F6"
-                icon="🪪"
-                label="KYC Filters"
-                :badge-count="filterBadge"
-            >
-                <!--
-                    KycFilters recebe directamente as props que o controller já envia.
-                    Quando o utilizador clica "Apply", faz router.get internamente.
-                    Quando emite badge-count, actualizamos filterBadge aqui.
-                -->
-                <FiltersPanel
-                    :fields="filter_fields"
-                    :filters="filters"
-                    :stats-cards="stats_cards"
-                    :export-actions="export_actions"
-                    route-name="admin.kyc.index"
-                    @badge-count="filterBadge = $event"
-                />
-            </RightFilterSidebar>
+            </div>
         </div>
+
+        <!-- Filters Sidebar -->
+        <RightFilterSidebar
+            accent-color="#3B82F6"
+            icon="🪪"
+            label="KYC Filters"
+            :badge-count="filterBadge"
+        >
+            <FiltersPanel
+                :fields="filter_fields"
+                :filters="filters"
+                :stats-cards="stats_cards"
+                :export-actions="export_actions"
+                route-name="admin.kyc.index"
+                @badge-count="filterBadge = $event"
+            />
+        </RightFilterSidebar>
     </AuthenticatedLayout>
 </template>
