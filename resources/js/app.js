@@ -1,15 +1,18 @@
 import './echo'
-import '../css/app.css'
-import '../css/navbar-vertical.css'
-import '../css/category-drilldown.css'
-import '../css/filters.css'
-import '../css/tabler/tabler.min.css'
-import '../css/main.css'
-import '../css/header-navbar.css'
-import '@fortawesome/fontawesome-free/css/all.min.css'
 
+import '../css/tabler/tabler.min.css'
+import '@fortawesome/fontawesome-free/css/all.min.css'
 import 'filepond/dist/filepond.min.css'
 import 'filepond-plugin-image-preview/dist/filepond-plugin-image-preview.min.css'
+
+import '../css/app.css'
+import '../css/main.css'
+
+import '../css/navbar-vertical.css'
+import '../css/header-navbar.css'
+import '../css/category-drilldown.css'
+import '../css/filters.css'
+import '../css/kyc.css'
 
 import { createApp, h, watch } from 'vue'
 import { createInertiaApp } from '@inertiajs/vue3'

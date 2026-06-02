@@ -26,7 +26,6 @@ export default {
                     800: '#1449b0',
                     900: '#0f3580',
                 },
-                // Ou mais limpo — adiciona uma cor "primary"
                 primary: {
                     50:  '#f0f5ff',
                     100: '#dbeafe',

@@ -1,0 +1,616 @@
+/* Layout */
+.kyc-container {
+    max-width: 1200px;
+    margin: 0 auto;
+    padding: 1.5rem 1rem;
+    display: flex;
+    flex-direction: column;
+    gap: 1.25rem;
+}
+
+.kyc-grid {
+    display: grid;
+    grid-template-columns: 1fr;
+    gap: 1.25rem;
+}
+
+@media (min-width: 1024px) {
+    .kyc-grid {
+        grid-template-columns: 1fr 280px;
+        align-items: start;
+    }
+}
+
+.kyc-main {
+    display: flex;
+    flex-direction: column;
+    gap: 1.25rem;
+    min-width: 0;
+}
+
+.kyc-sidebar {
+    min-width: 0;
+}
+
+.kyc-sidebar-sticky {
+    display: flex;
+    flex-direction: column;
+    gap: 1.25rem;
+}
+
+@media (min-width: 1024px) {
+    .kyc-sidebar-sticky {
+        position: sticky;
+        top: 1.5rem;
+    }
+}
+
+/* Header */
+.kyc-eyebrow {
+    font-size: 0.65rem;
+    font-weight: 700;
+    letter-spacing: 0.12em;
+    text-transform: uppercase;
+    color: #94a3b8;
+    margin: 0 0 2px;
+}
+
+.kyc-page-title {
+    font-size: 1.125rem;
+    font-weight: 700;
+    color: #0f172a;
+    margin: 0;
+    line-height: 1.3;
+}
+
+.kyc-page-sub {
+    font-size: 0.8125rem;
+    color: #64748b;
+    margin: 1px 0 0;
+}
+
+.kyc-back-btn {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    width: 2.25rem;
+    height: 2.25rem;
+    border-radius: 0.625rem;
+    border: 1px solid #e2e8f0;
+    background: #fff;
+    color: #475569;
+    flex-shrink: 0;
+    transition: background 0.15s, border-color 0.15s, color 0.15s;
+}
+
+.kyc-back-btn:hover {
+    background: #f8fafc;
+    border-color: #cbd5e1;
+    color: #0f172a;
+}
+
+/* Status pill */
+.kyc-status-pill {
+    display: inline-flex;
+    align-items: center;
+    gap: 0.4rem;
+    padding: 0.3rem 0.75rem;
+    border-radius: 99px;
+    font-size: 0.8rem;
+    font-weight: 600;
+    border: 1px solid transparent;
+}
+
+.kyc-status-pill--sm {
+    font-size: 0.75rem;
+    padding: 0.2rem 0.6rem;
+}
+
+.kyc-status-dot {
+    width: 6px;
+    height: 6px;
+    border-radius: 50%;
+    flex-shrink: 0;
+}
+
+/* Card */
+.kyc-card {
+    background: #fff;
+    border: 1px solid #e8edf2;
+    border-radius: 0.875rem;
+    overflow: hidden;
+}
+
+.kyc-card-header {
+    display: flex;
+    align-items: center;
+    gap: 0.5rem;
+    padding: 0.875rem 1.125rem;
+    border-bottom: 1px solid #f1f5f9;
+    background: #fafbfc;
+}
+
+.kyc-card-icon {
+    font-size: 0.875rem;
+    color: #94a3b8;
+    flex-shrink: 0;
+}
+
+.kyc-card-title {
+    font-size: 0.8125rem;
+    font-weight: 700;
+    letter-spacing: 0.04em;
+    text-transform: uppercase;
+    color: #64748b;
+    margin: 0;
+    flex: 1;
+}
+
+.kyc-badge-count {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    min-width: 1.25rem;
+    height: 1.25rem;
+    padding: 0 0.3rem;
+    border-radius: 99px;
+    background: #f1f5f9;
+    color: #64748b;
+    font-size: 0.6875rem;
+    font-weight: 700;
+}
+
+/* Field list */
+.kyc-field-list {
+    margin: 0;
+    padding: 0 1.125rem;
+}
+
+.kyc-field-row {
+    display: flex;
+    justify-content: space-between;
+    align-items: baseline;
+    gap: 1rem;
+    padding: 0.6875rem 0;
+    border-bottom: 1px solid #f1f5f9;
+}
+
+.kyc-field-row:last-child {
+    border-bottom: none;
+}
+
+.kyc-field-label {
+    font-size: 0.8rem;
+    color: #94a3b8;
+    flex-shrink: 0;
+    min-width: 6rem;
+}
+
+.kyc-field-value {
+    font-size: 0.875rem;
+    font-weight: 500;
+    color: #1e293b;
+    text-align: right;
+    display: flex;
+    flex-direction: column;
+    gap: 1px;
+}
+
+.kyc-field-right {
+    text-align: right;
+}
+
+.kyc-field-strong {
+    font-weight: 600;
+    color: #0f172a;
+}
+
+.kyc-field-muted {
+    font-size: 0.75rem;
+    font-weight: 400;
+    color: #94a3b8;
+}
+
+/* Documents */
+.kyc-docs-list {
+    padding: 0.5rem 0.75rem;
+    display: flex;
+    flex-direction: column;
+    gap: 0.25rem;
+}
+
+.kyc-doc-row {
+    display: flex;
+    align-items: center;
+    gap: 0.75rem;
+    padding: 0.625rem 0.5rem;
+    border-radius: 0.5rem;
+    text-decoration: none;
+    transition: background 0.12s;
+}
+
+.kyc-doc-row:hover {
+    background: #f8fafc;
+}
+
+.kyc-doc-icon-wrap {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    width: 2rem;
+    height: 2rem;
+    border-radius: 0.5rem;
+    background: #fef2f2;
+    flex-shrink: 0;
+}
+
+.kyc-doc-pdf-icon {
+    color: #ef4444;
+    font-size: 0.875rem;
+}
+
+.kyc-doc-info {
+    flex: 1;
+    min-width: 0;
+}
+
+.kyc-doc-name {
+    font-size: 0.875rem;
+    font-weight: 600;
+    color: #0f172a;
+    margin: 0;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+}
+
+.kyc-doc-meta {
+    font-size: 0.75rem;
+    color: #94a3b8;
+    margin: 1px 0 0;
+}
+
+.kyc-doc-ext-icon {
+    font-size: 0.75rem;
+    color: #cbd5e1;
+    flex-shrink: 0;
+}
+
+.kyc-empty-state {
+    font-size: 0.875rem;
+    color: #94a3b8;
+    text-align: center;
+    padding: 1rem 0;
+    margin: 0;
+}
+
+/* Rejection banner */
+.kyc-rejection-banner {
+    display: flex;
+    gap: 0.75rem;
+    align-items: flex-start;
+    padding: 1rem 1.125rem;
+    background: #fef2f2;
+    border: 1px solid #fecaca;
+    border-radius: 0.875rem;
+}
+
+.kyc-rejection-icon {
+    color: #ef4444;
+    margin-top: 2px;
+    flex-shrink: 0;
+    font-size: 0.875rem;
+}
+
+.kyc-rejection-label {
+    font-size: 0.7rem;
+    font-weight: 700;
+    letter-spacing: 0.08em;
+    text-transform: uppercase;
+    color: #ef4444;
+    margin: 0 0 3px;
+}
+
+.kyc-rejection-text {
+    font-size: 0.875rem;
+    color: #b91c1c;
+    margin: 0;
+    line-height: 1.5;
+}
+
+/* Timeline */
+.kyc-timeline {
+    list-style: none;
+    padding: 0.75rem 1.125rem 0.875rem;
+    margin: 0;
+    display: flex;
+    flex-direction: column;
+    gap: 0;
+}
+
+.kyc-timeline-item {
+    display: flex;
+    gap: 0.875rem;
+    position: relative;
+    padding-bottom: 1rem;
+}
+
+.kyc-timeline-item::before {
+    content: '';
+    position: absolute;
+    left: 5px;
+    top: 18px;
+    bottom: 0;
+    width: 1px;
+    background: #e8edf2;
+}
+
+.kyc-timeline-last {
+    padding-bottom: 0;
+}
+
+.kyc-timeline-last::before {
+    display: none;
+}
+
+.kyc-timeline-dot {
+    width: 11px;
+    height: 11px;
+    border-radius: 50%;
+    background: #3b82f6;
+    border: 2px solid #fff;
+    outline: 1.5px solid #3b82f6;
+    flex-shrink: 0;
+    margin-top: 4px;
+    z-index: 1;
+}
+
+.kyc-timeline-content {
+    flex: 1;
+    min-width: 0;
+}
+
+.kyc-timeline-transition {
+    display: flex;
+    align-items: center;
+    gap: 0.4rem;
+    flex-wrap: wrap;
+    font-size: 0.875rem;
+    color: #1e293b;
+    margin: 0;
+}
+
+.kyc-timeline-from {
+    font-weight: 600;
+    color: #64748b;
+}
+
+.kyc-timeline-to {
+    font-weight: 600;
+    color: #0f172a;
+}
+
+.kyc-timeline-arrow {
+    font-size: 0.625rem;
+    color: #cbd5e1;
+}
+
+.kyc-timeline-notes {
+    font-size: 0.8125rem;
+    color: #475569;
+    margin: 3px 0 0;
+    line-height: 1.5;
+}
+
+.kyc-timeline-time {
+    display: block;
+    font-size: 0.75rem;
+    color: #94a3b8;
+    margin-top: 3px;
+}
+
+/* Sidebar */
+.kyc-sidebar-fields {
+    padding: 0.125rem 1.125rem 0.25rem;
+    margin: 0;
+    display: flex;
+    flex-direction: column;
+}
+
+.kyc-sidebar-field {
+    padding: 0.6875rem 0;
+    border-bottom: 1px solid #f1f5f9;
+    display: flex;
+    flex-direction: column;
+    gap: 0.3rem;
+}
+
+.kyc-sidebar-field:last-child {
+    border-bottom: none;
+}
+
+.kyc-sidebar-label {
+    font-size: 0.7rem;
+    font-weight: 700;
+    letter-spacing: 0.08em;
+    text-transform: uppercase;
+    color: #94a3b8;
+}
+
+.kyc-sidebar-value {
+    font-size: 0.875rem;
+    font-weight: 600;
+    color: #0f172a;
+    margin: 0;
+}
+
+.kyc-sidebar-muted {
+    font-size: 0.8125rem;
+    color: #94a3b8;
+    margin: 0;
+}
+
+/* Actions */
+.kyc-actions {
+    padding: 0.875rem 1.125rem;
+    display: flex;
+    flex-direction: column;
+    gap: 0.625rem;
+}
+
+/* Buttons */
+.kyc-btn {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    gap: 0.5rem;
+    padding: 0.65rem 1.25rem;
+    border-radius: 0.625rem;
+    font-size: 0.875rem;
+    font-weight: 600;
+    cursor: pointer;
+    border: none;
+    transition: background 0.14s, opacity 0.14s, transform 0.1s;
+    width: 100%;
+}
+
+.kyc-btn:active {
+    transform: scale(0.98);
+}
+
+.kyc-btn:disabled {
+    opacity: 0.6;
+    cursor: not-allowed;
+}
+
+.kyc-btn-approve {
+    background: #16a34a;
+    color: #fff;
+}
+
+.kyc-btn-approve:hover:not(:disabled) {
+    background: #15803d;
+}
+
+.kyc-btn-reject {
+    background: #dc2626;
+    color: #fff;
+}
+
+.kyc-btn-reject:hover:not(:disabled) {
+    background: #b91c1c;
+}
+
+.kyc-btn-ghost {
+    background: #f1f5f9;
+    color: #475569;
+}
+
+.kyc-btn-ghost:hover:not(:disabled) {
+    background: #e2e8f0;
+}
+
+/* Modal */
+.kyc-modal {
+    padding: 1.75rem;
+    display: flex;
+    flex-direction: column;
+    gap: 1rem;
+}
+
+.kyc-modal-icon {
+    width: 2.75rem;
+    height: 2.75rem;
+    border-radius: 0.75rem;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    font-size: 1.125rem;
+    flex-shrink: 0;
+}
+
+.kyc-modal-icon--approve {
+    background: #dcfce7;
+    color: #16a34a;
+}
+
+.kyc-modal-icon--reject {
+    background: #fee2e2;
+    color: #dc2626;
+}
+
+.kyc-modal-title {
+    font-size: 1.0625rem;
+    font-weight: 700;
+    color: #0f172a;
+    margin: 0;
+    line-height: 1.3;
+}
+
+.kyc-modal-desc {
+    font-size: 0.875rem;
+    color: #475569;
+    margin: 0;
+    line-height: 1.6;
+}
+
+.kyc-modal-field {
+    display: flex;
+    flex-direction: column;
+    gap: 0.4rem;
+}
+
+.kyc-modal-label {
+    font-size: 0.8125rem;
+    font-weight: 600;
+    color: #374151;
+}
+
+.kyc-optional {
+    font-weight: 400;
+    color: #94a3b8;
+    font-size: 0.75rem;
+}
+
+.kyc-required {
+    color: #ef4444;
+    font-size: 0.875rem;
+}
+
+.kyc-textarea {
+    width: 100%;
+    padding: 0.625rem 0.875rem;
+    border: 1px solid #e2e8f0;
+    border-radius: 0.625rem;
+    font-size: 0.875rem;
+    color: #1e293b;
+    background: #fafafa;
+    resize: vertical;
+    transition: border-color 0.15s, box-shadow 0.15s;
+    font-family: inherit;
+    box-sizing: border-box;
+}
+
+.kyc-textarea:focus {
+    outline: none;
+    border-color: #6366f1;
+    box-shadow: 0 0 0 3px rgba(99, 102, 241, 0.1);
+    background: #fff;
+}
+
+.kyc-field-error {
+    font-size: 0.8rem;
+    color: #ef4444;
+    margin: 0;
+}
+
+.kyc-modal-footer {
+    display: flex;
+    gap: 0.625rem;
+    justify-content: flex-end;
+    padding-top: 0.25rem;
+}
+
+.kyc-modal-footer .kyc-btn {
+    width: auto;
+}
