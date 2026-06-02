@@ -10,11 +10,6 @@ export default {
         './resources/js/**/*.vue',
     ],
 
-    safelist: [
-        'sm:table-cell',
-        'md:table-cell',
-    ],
-
     theme: {
         extend: {
             fontFamily: {
