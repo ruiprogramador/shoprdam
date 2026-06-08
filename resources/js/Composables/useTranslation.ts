@@ -14,8 +14,15 @@ interface TranslationItem {
 export function useTranslation() {
     const page = usePage()
 
+    debugger;
+
+    console.log('Page props:');
+    console.log(page.props);
+
+    debugger;
+
     const translations = computed<Record<string, TranslationItem>>(
-        () => (page.props.translations as Record<string, TranslationItem>) ?? {}
+        () => (page.props.sharedTranslations as Record<string, TranslationItem>) ?? {}
     )
 
     const locale = computed<string>(

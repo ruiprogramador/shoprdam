@@ -14,6 +14,9 @@ use Inertia\Response;
 use Spatie\QueryBuilder\AllowedFilter;
 use Spatie\QueryBuilder\AllowedSort;
 use Spatie\QueryBuilder\QueryBuilder;
+use Stichoza\GoogleTranslate\GoogleTranslate;
+// Log
+use Illuminate\Support\Facades\Log;
 
 class TranslationController extends Controller
 {
@@ -111,13 +114,75 @@ class TranslationController extends Controller
             ]
         );
 
-        $this->clearCache($request->locale, $request->key);
-
         if ($request->boolean('is_last')) {
+            
+            #region auto-translation
+            $values = Translation::values();
+
+            // Tentamos descobrir qual foi a língua que tu preencheste (a nossa origem)
+            $sourceValue = $values->first(fn($v) => !empty($v->value) && $v->status !== 'auto');
+
+            // Se encontramos uma língua preenchida manualmente, vamos usá-la como base para traduzir as vazias
+            if ($sourceValue) {
+                foreach ($values as $targetValue) {
+                    // Se esta língua específica estiver vazia ou marcada como "missing"
+                    if (empty($targetValue->value) || $targetValue->status === 'missing') {
+                        try {
+                            // Configura o tradutor automático (Ex: de PT para EN)
+                            $tr = new GoogleTranslate($targetValue->locale);
+                            $tr->setSource($sourceValue->locale);
+
+                            // Traduz o texto principal
+                            $targetValue->value = $tr->translate($sourceValue->value);
+
+                            // Traduz o Short se a origem tiver
+                            if (!empty($sourceValue->value_short)) {
+                                $targetValue->value_short = GoogleTranslate::trans($sourceValue->value_short, $targetValue->locale, $sourceValue->locale);
+                            }
+
+                            // Traduz o Long se a origem tiver
+                            if (!empty($sourceValue->value_long)) {
+                                $targetValue->value_long = GoogleTranslate::trans($sourceValue->value_long, $targetValue->locale, $sourceValue->locale);
+                            }
+
+                            // Mantém o HTML original (para não quebrar tags)
+                            $targetValue->value_html = $sourceValue->value_html;
+                            
+                            // Marca o status como auto e guarda
+                            $targetValue->status = 'auto';
+                            $targetValue->updated_by = auth('admin')->id();
+                            $targetValue->translated_at = now();
+                            $targetValue->save();
+
+                        }
+                        #region se o Google falhar, não quero que isso quebre o processo de guardar a tradução manual 
+                        catch (\Exception $e) {
+                            Log::error("Auto-translation failed for TranslationValue ID {$targetValue->id}: " . $e->getMessage());
+                            
+                            // Opcional: marcar este valor como "auto" mesmo sem tradução, para tentar traduzir novamente no futuro
+                            $targetValue->status = 'auto';
+                            $targetValue->updated_by = auth('admin')->id();
+                            $targetValue->translated_at = now();
+                            $targetValue->save();
+                        }
+                        #endregion
+                    }
+                }
+            }
+            #endregion
+            
+            #region auto-clear cache para a key/locale
+            $this->clearCache($translation);
+            #endregion
+            
+            #region redireccionamento para a listagem com mensagem de sucesso
             return back()->with('success', 'Translation saved successfully.');
+            #endregion
         }
 
+        #region redireccionamento simples (sem mensagem)
         return back();
+        #endregion
     }
 
     /**
@@ -143,10 +208,7 @@ class TranslationController extends Controller
             'translated_at' => now(),
         ]);
 
-        $this->clearCache(
-            $translationValue->locale,
-            $translationValue->translation->key
-        );
+        $this->clearCache($translationValue->translation);
 
         if ($request->boolean('is_last')) {
             return back()->with('success', 'Translation saved successfully.');

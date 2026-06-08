@@ -91,6 +91,9 @@ provide(LAYOUT_STATE_KEY, {
 
             <!-- MAIN -->
             <main class="flex-1 overflow-y-auto p-4 sm:p-6 min-h-[calc(100vh-3.5rem)]">
+                <header v-if="$slots.header" class="mb-6">
+                    <slot name="header" />
+                </header>
                 <slot />
             </main>
 

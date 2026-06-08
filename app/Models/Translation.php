@@ -4,6 +4,7 @@ namespace App\Models;
 
 use Illuminate\Database\Eloquent\Model;
 use Illuminate\Database\Eloquent\Relations\HasMany;
+use Illuminate\Support\Facades\DB;
 
 class Translation extends Model
 {
@@ -50,13 +51,25 @@ class Translation extends Model
     // ─── Helpers ─────────────────────────────────────────────────
 
     /**
+     * Devolve as locales todas
+     */
+    public static function allLocales(): array
+    {
+        return DB::table('languages')
+            ->orderBy('code')
+            ->pluck('code')
+            ->toArray();
+    }
+
+    /**
      * Devolve as locales disponíveis a partir de translation_values.
      */
     public static function availableLocales(): array
     {
-        return TranslationValue::distinct()
-            ->orderBy('locale')
-            ->pluck('locale')
+        return DB::table('languages')
+            ->whereIn('code', ['en', 'pt']) // Filtro temporário para focar só em ENG e PT
+            ->orderBy('code')
+            ->pluck('code')
             ->toArray();
     }
 
