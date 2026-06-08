@@ -7,50 +7,35 @@ import { Link } from '@inertiajs/vue3'
         <nav>
             <ul>
                 <li>
-                    <Link class="active" :href="route('home')">Home</Link>
+                    <Link :href="route('home')">Home</Link>
                 </li>
                 <li>
-                    <!-- toDo -->
-                    <!-- <Link :href="route('about')">About</Link> -->
+                    <!-- toDo: <Link :href="route('about')">About</Link> -->
+                    <a href="#">About</a>
                 </li>
                 <li>
-                    <a href="#">Shop <i class="fi-rs-angle-down"></i></a>
+                    <a href="#">Shop <i class="fa fa-angle-down"></i></a>
                     <ul class="sub-menu">
-                        <li>Shop</li>
-                        <li>Shop Details</li>
-                        <!-- toDo -->
-                        <!-- <li><Link :href="route('shop.index')">Shop</Link></li>
-                        <li><Link :href="route('shop.index')">Shop Details</Link></li> -->
+                        <li><a href="#">Shop</a></li>
+                        <li><a href="#">Shop Details</a></li>
                     </ul>
                 </li>
                 <li>
-                    <a href="#">Vendors <i class="fi-rs-angle-down"></i></a>
+                    <a href="#">Vendors <i class="fa fa-angle-down"></i></a>
                     <ul class="sub-menu">
-                        <li>Vendors</li>
-                        <li>Vendors Details</li>
-                        <!-- toDo -->
-                        <!-- <li><Link :href="route('vendors.index')">Vendors</Link></li>
-                        <li><Link :href="route('vendors.index')">Vendor Details</Link></li> -->
+                        <li><a href="#">Vendors</a></li>
+                        <li><a href="#">Vendor Details</a></li>
                     </ul>
                 </li>
                 <li>
-                    <a href="#">Blog <i class="fi-rs-angle-down"></i></a>
+                    <a href="#">Blog <i class="fa fa-angle-down"></i></a>
                     <ul class="sub-menu">
-                        <li>Blog</li>
-                        <li>Blog Details</li>
-                        <!-- toDo -->
-                        <!-- <li><Link :href="route('blog.index')">Blog</Link></li>
-                        <li><Link :href="route('blog.index')">Blog Details</Link></li> -->
+                        <li><a href="#">Blog</a></li>
+                        <li><a href="#">Blog Details</a></li>
                     </ul>
                 </li>
-                <li>
-                    Contact
-                    <!-- <Link :href="route('contact')">Contact</Link> -->
-                </li>
-                <li class="hot-deals">
-                    Flash Sell
-                    <!-- <Link :href="route('flash-sell')">Flash Sell</Link> -->
-                </li>
+                <li><a href="#">Contact</a></li>
+                <li class="hot-deals"><a href="#">Flash Sell</a></li>
             </ul>
         </nav>
     </div>

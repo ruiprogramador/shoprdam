@@ -1,88 +1,66 @@
 <script setup>
-import { ref, onMounted, nextTick } from 'vue'
-import { Link } from '@inertiajs/vue3'
+import { ref } from 'vue'
 import DailyDealCard from './DailyDealCard.vue'
 
 const props = defineProps({
-  products: {
-    type: Array,
-    default: () => []
-  }
+    products: { type: Array, default: () => [] }
 })
 
 const activeTab = ref('featured')
 const tabs = [
-  { id: 'featured', name: 'Featured' },
-  { id: 'popular', name: 'Popular' },
-  { id: 'new', name: 'New added' }
+    { id: 'featured', name: 'Featured' },
+    { id: 'popular',  name: 'Popular'  },
+    { id: 'new',      name: 'New added'},
 ]
 
-onMounted(async () => {
-  await nextTick()
-  initCarousel()
-})
-
-const initCarousel = () => {
-  if (window.$ && window.$.fn.slick) {
-    $('.carausel-4-columns').slick({
-      slidesToShow: 4,
-      slidesToScroll: 1,
-      arrows: true,
-      dots: false,
-      responsive: [
-        { breakpoint: 1400, settings: { slidesToShow: 3 } },
-        { breakpoint: 992, settings: { slidesToShow: 2 } },
-        { breakpoint: 768, settings: { slidesToShow: 1 } }
-      ]
-    })
-  }
+const filteredProducts = (tabId) => {
+    if (tabId === 'featured') return props.products.filter(p => p.is_featured)
+    if (tabId === 'popular')  return props.products.filter(p => p.is_popular)
+    if (tabId === 'new')      return props.products.filter(p => p.is_new)
+    return props.products
 }
 </script>
 
 <template>
-  <section class="section-padding pb-5">
-    <div class="container">
-      <div class="section-title wow animate__animated animate__fadeIn">
-        <h3>Daily Best Sells</h3>
-        <ul class="nav nav-tabs links" role="tablist">
-          <li v-for="tab in tabs" :key="tab.id" class="nav-item">
-            <button
-              class="nav-link"
-              :class="{ active: activeTab === tab.id }"
-              @click="activeTab = tab.id"
-            >
-              {{ tab.name }}
-            </button>
-          </li>
-        </ul>
-      </div>
-
-      <div class="row">
-        <div class="col-lg-3 d-none d-lg-flex">
-          <div class="banner-img style-2">
-            <img src="/img/banner/banner-4.jpg" alt="Banner">
-            <div class="banner-text">
-                <h2 class="mb-50">Luxury Memory Foam Soft</h2>
-                <!-- toDo -->
-                <!-- <Link :href="route('shop.index')" class="btn btn-xs">
-                    Shop Now <i class="fi-rs-arrow-small-right"></i>
-                </Link> -->
+    <section class="section-padding pb-5">
+        <div class="container">
+            <div class="section-title wow animate__animated animate__fadeIn">
+                <h3>Daily Best Sells</h3>
+                <ul class="nav nav-tabs links" role="tablist">
+                    <li v-for="tab in tabs" :key="tab.id" class="nav-item">
+                        <button
+                            class="nav-link"
+                            :class="{ active: activeTab === tab.id }"
+                            type="button"
+                            @click="activeTab = tab.id"
+                        >{{ tab.name }}</button>
+                    </li>
+                </ul>
             </div>
-          </div>
-        </div>
 
-        <div class="col-lg-9 col-md-12">
-          <div class="carausel-4-columns-cover arrow-center position-relative">
-            <div class="carausel-4-columns">
-              <DailyDealCard
-                v-for="product in products"
-                :key="product.id"
-                :product="product"
-              />
+            <div class="row">
+                <div class="col-lg-3 d-none d-lg-flex">
+                    <div class="banner-img style-2">
+                        <img src="/img/banner/banner-4.jpg" alt="Banner" />
+                    </div>
+                </div>
+
+                <div class="col-lg-9 col-md-12">
+                    <!-- Scroll nativo com snap — sem jQuery -->
+                    <div class="overflow-x-auto">
+                        <div class="flex gap-4 snap-x snap-mandatory pb-2"
+                             style="scroll-behavior: smooth;">
+                            <div
+                                v-for="product in filteredProducts(activeTab)"
+                                :key="product.id"
+                                class="snap-start shrink-0 w-56"
+                            >
+                                <DailyDealCard :product="product" />
+                            </div>
+                        </div>
+                    </div>
+                </div>
             </div>
-          </div>
         </div>
-      </div>
-    </div>
-  </section>
+    </section>
 </template>

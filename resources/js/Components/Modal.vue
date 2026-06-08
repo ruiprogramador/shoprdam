@@ -1,5 +1,5 @@
 <script setup>
-import { computed, onMounted, onUnmounted, ref, watch } from 'vue';
+import { computed, onMounted, onUnmounted, ref, watch } from 'vue'
 
 const props = defineProps({
     show: {
@@ -14,64 +14,65 @@ const props = defineProps({
         type: Boolean,
         default: true,
     },
-});
+    fullscreenMobile: {
+        type: Boolean,
+        default: true,
+    },
+})
 
-const emit = defineEmits(['close']);
-const dialog = ref();
-const showSlot = ref(props.show);
+const emit = defineEmits(['close'])
+const dialog = ref()
+const showSlot = ref(props.show)
 
 watch(
     () => props.show,
     () => {
         if (props.show) {
-            document.body.style.overflow = 'hidden';
-            showSlot.value = true;
-
-            dialog.value?.showModal();
+            document.body.style.overflow = 'hidden'
+            showSlot.value = true
+            dialog.value?.showModal()
         } else {
-            document.body.style.overflow = '';
-
+            document.body.style.overflow = ''
             setTimeout(() => {
-                dialog.value?.close();
-                showSlot.value = false;
-            }, 200);
+                dialog.value?.close()
+                showSlot.value = false
+            }, 200)
         }
-    },
-);
+    }
+)
 
 const close = () => {
-    if (props.closeable) {
-        emit('close');
-    }
-};
+    if (props.closeable) emit('close')
+}
 
 const closeOnEscape = (e) => {
     if (e.key === 'Escape') {
-        e.preventDefault();
-
-        if (props.show) {
-            close();
-        }
+        e.preventDefault()
+        if (props.show) close()
     }
-};
+}
 
-onMounted(() => document.addEventListener('keydown', closeOnEscape));
-
+onMounted(() => document.addEventListener('keydown', closeOnEscape))
 onUnmounted(() => {
-    document.removeEventListener('keydown', closeOnEscape);
-
-    document.body.style.overflow = '';
-});
+    document.removeEventListener('keydown', closeOnEscape)
+    document.body.style.overflow = ''
+})
 
 const maxWidthClass = computed(() => {
-    return {
-        sm: 'sm:max-w-sm',
-        md: 'sm:max-w-md',
-        lg: 'sm:max-w-lg',
-        xl: 'sm:max-w-xl',
+    const map = {
+        xs:  'sm:max-w-xs',
+        sm:  'sm:max-w-sm',
+        md:  'sm:max-w-md',
+        lg:  'sm:max-w-lg',
+        xl:  'sm:max-w-xl',
         '2xl': 'sm:max-w-2xl',
-    }[props.maxWidth];
-});
+        '3xl': 'sm:max-w-3xl',
+        '4xl': 'sm:max-w-4xl',
+        '5xl': 'sm:max-w-5xl',
+        full: 'sm:max-w-full',
+    }
+    return map[props.maxWidth] ?? 'sm:max-w-2xl'
+})
 </script>
 
 <template>
@@ -79,10 +80,9 @@ const maxWidthClass = computed(() => {
         class="z-50 m-0 min-h-full min-w-full overflow-y-auto bg-transparent backdrop:bg-transparent"
         ref="dialog"
     >
-        <div
-            class="fixed inset-0 z-50 overflow-y-auto px-4 py-6 sm:px-0"
-            scroll-region
-        >
+        <div class="fixed inset-0 z-50 flex items-end sm:items-center justify-center px-0 sm:px-4 py-0 sm:py-6">
+
+            <!-- Backdrop -->
             <Transition
                 enter-active-class="ease-out duration-300"
                 enter-from-class="opacity-0"
@@ -93,15 +93,13 @@ const maxWidthClass = computed(() => {
             >
                 <div
                     v-show="show"
-                    class="fixed inset-0 transform transition-all"
+                    class="fixed inset-0 bg-gray-900/60 backdrop-blur-sm transition-all"
                     @click="close"
-                >
-                    <div
-                        class="absolute inset-0 bg-gray-500 opacity-75"
-                    />
-                </div>
+                    aria-hidden="true"
+                />
             </Transition>
 
+            <!-- Panel -->
             <Transition
                 enter-active-class="ease-out duration-300"
                 enter-from-class="opacity-0 translate-y-4 sm:translate-y-0 sm:scale-95"
@@ -112,10 +110,27 @@ const maxWidthClass = computed(() => {
             >
                 <div
                     v-show="show"
-                    class="mb-6 transform overflow-hidden rounded-lg bg-white shadow-xl transition-all sm:mx-auto sm:w-full"
-                    :class="maxWidthClass"
+                    class="relative z-10 w-full bg-white shadow-xl transition-all
+                           rounded-t-2xl sm:rounded-lg
+                           max-h-[92dvh] sm:max-h-[90vh]
+                           flex flex-col
+                           pb-[env(safe-area-inset-bottom)]"
+                    :class="[
+                        maxWidthClass,
+                        fullscreenMobile ? 'sm:w-full' : 'mx-4 sm:mx-auto rounded-2xl'
+                    ]"
+                    role="dialog"
+                    aria-modal="true"
                 >
-                    <slot v-if="showSlot" />
+                    <!-- Drag handle (mobile) -->
+                    <div class="flex justify-center pt-3 pb-1 sm:hidden flex-shrink-0">
+                        <div class="w-10 h-1 rounded-full bg-gray-300" />
+                    </div>
+
+                    <!-- Scrollable content -->
+                    <div class="overflow-y-auto flex-1 overscroll-contain">
+                        <slot v-if="showSlot" />
+                    </div>
                 </div>
             </Transition>
         </div>

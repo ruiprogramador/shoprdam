@@ -1,10 +1,11 @@
+
 .dropdown-content-wrap{
     display: flex;
     align-items: center;   
 
     .dropdown-icon-toggle{
         font-size: 30px;
-        color: #333;
+        color: var(--textPrimary);
         line-height: 1;
         display: inline-block;
         position: relative;
@@ -13,7 +14,7 @@
     .dropdown-icon-text{
         font-size: 16px; 
         margin: 5px 0 0 10px;
-        color: #333;
+        color: var(--textPrimary);
     }
 }
 
