@@ -103,4 +103,6 @@ Route::middleware('auth:admin')
         Route::prefix('translation-values')->name('translations.')->group(function () {
             Route::match(['put', 'patch'], '/{translationValue}', [TranslationController::class, 'update'])->name('update');
         });
+
+        Route::get('logs', [\Rap2hpoutre\LaravelLogViewer\LogViewerController::class, 'index']);
     });
