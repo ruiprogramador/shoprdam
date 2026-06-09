@@ -73,6 +73,15 @@ class Translation extends Model
             ->toArray();
     }
 
+    public static function testLocales(): array
+    {
+        return DB::table('languages')
+            ->whereIn('code', ['en', 'pt', 'es', 'fr', 'de']) // Filtro temporário
+            ->orderBy('code')
+            ->pluck('code')
+            ->toArray();
+    }
+
     /**
      * Devolve os grupos disponíveis (prefixo antes do primeiro '.' na key).
      */
