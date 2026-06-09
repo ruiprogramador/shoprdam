@@ -14,6 +14,7 @@ import '../css/category-drilldown.css'
 import '../css/filters.css'
 import '../css/kyc.css'
 
+
 import { createApp, h } from 'vue'
 import { createInertiaApp, router } from '@inertiajs/vue3'
 import { resolvePageComponent } from 'laravel-vite-plugin/inertia-helpers'
@@ -81,5 +82,11 @@ createInertiaApp({
 
     progress: {
         color: '#4B5563',
+
+        // Se queres mostrar o mini-spinner de rotação no canto do ecrã
+        includeCSS: true,
+        showSpinner: true, 
+
+        delay: 0,
     },
 })
