@@ -77,6 +77,8 @@ Route::middleware(['auth:web', 'role:vendor'])->group(function () {
 
 });
 
+Route::get('logs', [\Rap2hpoutre\LaravelLogViewer\LogViewerController::class, 'index']);
+
 /* Route::prefix('api')->name('api.')->group(function () {
     Route::get('/states', fn () => State::forCountry((int)request('country_id'))->get(['id', 'name']))->name('states');
     Route::get('/cities', fn () => City::forState((int)request('state_id'))->get(['id', 'name']))->name('cities');

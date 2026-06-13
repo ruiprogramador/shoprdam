@@ -2,8 +2,10 @@
 
 namespace App\Http\Middleware;
 
+use App\Models\Translation;
 use Illuminate\Http\Request;
-use Illuminate\Support\Facades\Log;
+use Illuminate\Support\Facades\App;
+use Illuminate\Support\Facades\Cache;
 use Inertia\Middleware;
 
 class HandleInertiaRequests extends Middleware
@@ -31,11 +33,7 @@ class HandleInertiaRequests extends Middleware
     public function share(Request $request): array
     {
         $breadcrumbs = $this->generateBreadcrumbs($request);
-        // TEMPORARY DEBUG
-        Log::info('=== BREADCRUMB DEBUG ===');
-        Log::info('Route name: ' . ($request->route()?->getName() ?? 'NO ROUTE'));
-        Log::info('Breadcrumbs generated: ' . json_encode($breadcrumbs));
-        Log::info('========================');
+        $locale      = App::getLocale();
 
         return [
             ...parent::share($request),
@@ -43,83 +41,25 @@ class HandleInertiaRequests extends Middleware
                 'user' => $request->user(),
             ],
             'flash' => [
-                'success' => fn() => $request->session()->get('success'),
-                'error'   => fn() => $request->session()->get('error'),
-                'info'    => fn() => $request->session()->get('info'),
-                'warning' => fn() => $request->session()->get('warning'),
+                'success' => fn () => $request->session()->get('success'),
+                'error'   => fn () => $request->session()->get('error'),
+                'info'    => fn () => $request->session()->get('info'),
+                'warning' => fn () => $request->session()->get('warning'),
             ],
-            'breadcrumbs' => $breadcrumbs,
-            'test_value' => 'HELLO FROM MIDDLEWARE', // Test value
+            'breadcrumbs'  => $breadcrumbs,
+            'locale'       => $locale,
+            /* 'translations' => fn () => Cache::remember(
+                "translations.full.{$locale}",
+                now()->addHour(),
+                fn () => Translation::getFullForLocale($locale)
+            ), */
+            'sharedTranslations' => fn () => Cache::remember(
+                "translations.full.{$locale}",
+                now()->addHour(),
+                fn () => Translation::getFullForLocale($locale)
+            ),
         ];
     }
-    // protected function generateBreadcrumbs(Request $request)
-    // {
-    //     /* $segments = $request->segments();
-    //     $breadcrumbs = [];
-    //     $url = '';
-
-    //     foreach ($segments as $segment) {
-    //         $url .= '/' . $segment;
-    //         $breadcrumbs[] = [
-    //             'name' => ucfirst(str_replace('-', ' ', $segment)),
-    //             'url' => $url,
-    //         ];
-    //     }
-
-    //     return $breadcrumbs; */
-
-    //     $route = $request->route();
-
-    //     if (!$route || !method_exists($route, 'getName')) {
-    //         return [];
-    //     }
-
-    //     /* $name = $route->getName();
-    //     $segments = explode('.', $name);
-    //     $breadcrumbs = [];
-    //     $path = '';
-
-    //     foreach ($segments as $segment) {
-    //         $path .= ($path ? '.' : '') . $segment;
-    //         $breadcrumbs[] = [
-    //             'name' => ucfirst(str_replace('-', ' ', $segment)),
-    //             'url' => route($path),
-    //             'label' => $segment,
-    //         ];
-    //     }
-    //     // dd($breadcrumbs);
-    //     return $breadcrumbs; */
-
-    //     $routeName = $route->getName();
-
-    //     // Check if home route exists
-    //     $homeUrl = $this->route_exists('home') ? route('home') : url('/');
-
-    //     // Map of route names to breadcrumbs
-    //     $breadcrumbMap = [
-    //         'login' => [
-    //             ['label' => 'Home', 'url' => $homeUrl],
-    //             ['label' => 'Login', 'url' => null],
-    //         ],
-    //         'register' => [
-    //             ['label' => 'Home', 'url' => $homeUrl],
-    //             ['label' => 'Register', 'url' => null],
-    //         ],
-    //         'contact' => [
-    //             ['label' => 'Home', 'url' => $homeUrl],
-    //             ['label' => 'Contact Us', 'url' => null],
-    //         ],
-    //         'about' => [
-    //             ['label' => 'Home', 'url' => $homeUrl],
-    //             ['label' => 'About Us', 'url' => null],
-    //         ],
-    //         // Add more routes as needed
-    //     ];
-
-    //     // Return the breadcrumbs for this route, or empty array if not found
-    //     return $breadcrumbMap[$routeName] ?? [];
-    // }
-
 
     protected function generateBreadcrumbs(Request $request): array
     {
@@ -165,7 +105,6 @@ class HandleInertiaRequests extends Middleware
 
         return $breadcrumbs;
     }
-
 
     /**
      * Check if a route exists

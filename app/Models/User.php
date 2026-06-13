@@ -25,7 +25,8 @@ class User extends Authenticatable
         'email',
         'password',
         'image',
-        'user_type_id', // Add user_type to the fillable attributes
+        'user_type_id',
+        'locale',
     ];
 
     /**
