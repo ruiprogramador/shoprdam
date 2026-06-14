@@ -11,7 +11,7 @@ uses(RefreshDatabase::class);
 test('quando uma traducao e despachada ela entra na fila do horizon', function () {
     Queue::fake();
 
-    // Criamos um utilizador para simular o administrador
+    // Criar um utilizador para simular o administrador
     $admin = User::factory()->create();
 
     $translation = Translation::create([
@@ -22,7 +22,6 @@ test('quando uma traducao e despachada ela entra na fila do horizon', function (
     // Disparar o Job
     TranslateLanguages::dispatch($translation->id, $admin->id);
 
-    // ───► MUDANÇA AQUI: de assertDispatched para assertPushed ◄───
     Queue::assertPushed(TranslateLanguages::class, function ($job) use ($translation, $admin) {
         return $job->translationId === $translation->id && $job->adminId === $admin->id;
     });
