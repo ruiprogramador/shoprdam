@@ -18,8 +18,8 @@ class TranslateLanguages implements ShouldQueue
 
     public $timeout = 300; 
 
-    protected int $translationId;
-    protected int $adminId;
+    public int $translationId;
+    public int $adminId;
 
     /**
      * Create a new job instance.
