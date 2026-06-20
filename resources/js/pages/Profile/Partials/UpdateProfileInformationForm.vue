@@ -36,6 +36,10 @@ const submit = () => {
     })
 }
 
+watch(() => form.image, (value) => {
+    console.log('form.image changed:', value)
+})
+
 watch(() => props.imageUrl, (value) => {
     console.log('imageUrl watch fired:', value)
     if (value) {
