@@ -2,13 +2,16 @@
 
 namespace App\Http\Controllers\User;
 
+use App\Actions\OptimizeImage;
 use App\Http\Controllers\Controller;
 use App\Http\Requests\ProfileUpdateRequest;
+use App\Jobs\ProcessImageOptimization;
 use Illuminate\Contracts\Auth\MustVerifyEmail;
 use Illuminate\Http\RedirectResponse;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\Auth;
 use Illuminate\Support\Facades\Redirect;
+use Illuminate\Support\Facades\Log;
 use Inertia\Inertia;
 use Inertia\Response;
 
@@ -54,6 +57,10 @@ class ProfileController extends Controller
      */
     public function update(ProfileUpdateRequest $request): RedirectResponse
     {
+        Log::info('ProfileController update called');
+        Log::info('Has image:', ['has_image' => $request->hasFile('image')]);
+        Log::info('Files:', ['files' => $request->allFiles()]);
+
         $user = $request->user();
         // $user->fill($request->validated());
         $user->fill($request->safe()->except('image'));
@@ -63,14 +70,32 @@ class ProfileController extends Controller
         }
 
         // Add or Replace
-        $user->image = $this->handleFileUpload(
-            $request->file('image'),
-            $user->getOriginal('image'),
-            'profile_images',
-            'public'
-        );
+        $oldImagePath = $user->getOriginal('image');
+
+        if ($request->hasFile('image')) {
+            // 1. Guarda o ficheiro bruto (temporário)
+            $rawPath = $this->handleFileUpload(
+                $request->file('image'),
+                null,
+                'profile_images',
+                'public'
+            );
+
+            // 2. Apaga o antigo manualmente (agora que o trait não o faz)
+            if ($oldImagePath) {
+                Storage::disk('public')->delete($oldImagePath);
+            }
+
+            // 3. Atualiza com o path bruto (será substituído pelo Job)
+            $user->image = OptimizeImage::run($rawPath, 'profile_images');
+        }
 
         $user->save();
+
+        // 4. Despacha o Job para o Horizon otimizar em background
+        // if ($request->hasFile('image') && $user->image) {
+        //     ProcessImageOptimization::dispatch($user, 'image', 'profile_images');
+        // }
 
         return back()->with('success', 'Profile updated successfully.');
     }

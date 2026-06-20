@@ -1,6 +1,5 @@
 <script setup>
 import { watch, onMounted } from 'vue';
-
 import InputError from '@/Components/InputError.vue';
 import InputLabel from '@/Components/InputLabel.vue';
 import PrimaryButton from '@/Components/PrimaryButton.vue';
@@ -8,11 +7,6 @@ import TextInput from '@/Components/TextInput.vue';
 import FileUpload from '@/Components/FileUpload.vue';
 import { Link, useForm, usePage } from '@inertiajs/vue3';
 
-/*
-|--------------------------------------------------------------------------
-| 1. Capture props properly
-|--------------------------------------------------------------------------
-*/
 const props = defineProps({
     mustVerifyEmail: Boolean,
     status: String,
@@ -23,76 +17,43 @@ const props = defineProps({
     }
 });
 
-/*
-|--------------------------------------------------------------------------
-| 2. Access Inertia page props
-|--------------------------------------------------------------------------
-*/
 const page = usePage();
 const user = page.props.auth?.user ?? page.props.user;
 
+// updateProfileUrl fora do useForm
 const form = useForm({
     image: props.imageUrl ?? null,
     name: user?.name ?? '',
     email: user?.email ?? '',
-    updateProfileUrl: props.updateProfileUrl ?? null
 });
 
-/*
-|--------------------------------------------------------------------------
-| 3. Debug everything
-|--------------------------------------------------------------------------
-*/
-onMounted(() => {
-    console.log('---- Component Mounted ----');
+const submit = () => {
+    console.log('Submitting to:', props.updateProfileUrl)
+    console.log('form.image:', form.image)
 
-    console.log('Props from defineProps():');
-    console.log('mustVerifyEmail:', props.mustVerifyEmail);
-    console.log('status:', props.status);
-
-    console.log('All Inertia page props:');
-    console.log(page.props);
-});
-
-/*
-|--------------------------------------------------------------------------
-| 4. Watch for changes (optional but useful)
-|--------------------------------------------------------------------------
-*/
-watch(() => props.mustVerifyEmail, (value) => {
-    console.log('mustVerifyEmail changed:', value);
-});
-
-watch(() => props.status, (value) => {
-    console.log('status changed:', value);
-});
+    form.patch(route(props.updateProfileUrl), {
+        forceFormData: true, // necessário para enviar ficheiros
+    })
+}
 
 watch(() => props.imageUrl, (value) => {
-    console.log('imageUrl watch fired, value:', value)
+    console.log('imageUrl watch fired:', value)
     if (value) {
         form.image = value
-        console.log('form.image set to:', form.image)
     }
 }, { immediate: true })
-
 </script>
 
 <template>
     <section>
         <header>
-            <h2 class="text-lg font-medium text-gray-900">
-                Profile Information
-            </h2>
-
+            <h2 class="text-lg font-medium text-gray-900">Profile Information</h2>
             <p class="mt-1 text-sm text-gray-600">
                 Update your account's profile information and email address.
             </p>
         </header>
 
-        <form
-            @submit.prevent="form.patch(route(form.updateProfileUrl))"
-            class="mt-6 space-y-6"
-        >
+        <form @submit.prevent="submit" class="mt-6 space-y-6">
             <div>
                 <InputLabel for="image" value="Profile Image" />
                 <FileUpload v-model:src="form.image" class="mt-2" accepted-file-types="image/*" />
@@ -101,7 +62,6 @@ watch(() => props.imageUrl, (value) => {
 
             <div>
                 <InputLabel for="name" value="Name" />
-
                 <TextInput
                     id="name"
                     type="text"
@@ -111,13 +71,11 @@ watch(() => props.imageUrl, (value) => {
                     autofocus
                     autocomplete="name"
                 />
-
                 <InputError class="mt-2" :message="form.errors.name" />
             </div>
 
             <div>
                 <InputLabel for="email" value="Email" />
-
                 <TextInput
                     id="email"
                     type="email"
@@ -126,7 +84,6 @@ watch(() => props.imageUrl, (value) => {
                     required
                     autocomplete="username"
                 />
-
                 <InputError class="mt-2" :message="form.errors.email" />
             </div>
 
@@ -142,7 +99,6 @@ watch(() => props.imageUrl, (value) => {
                         Click here to re-send the verification email.
                     </Link>
                 </p>
-
                 <div
                     v-show="status === 'verification-link-sent'"
                     class="mt-2 text-sm font-medium text-green-600"
@@ -152,21 +108,7 @@ watch(() => props.imageUrl, (value) => {
             </div>
 
             <div class="flex items-center gap-4">
-                <PrimaryButton :disabled="form.processing">Save</PrimaryButton>
-
-                <!-- <Transition
-                    enter-active-class="transition ease-in-out"
-                    enter-from-class="opacity-0"
-                    leave-active-class="transition ease-in-out"
-                    leave-to-class="opacity-0"
-                >
-                    <p
-                        v-if="form.recentlySuccessful"
-                        class="text-sm text-gray-600"
-                    >
-                        Saved.
-                    </p>
-                </Transition> -->
+                <PrimaryButton type="button" @click="submit" :disabled="form.processing">Save</PrimaryButton>
             </div>
         </form>
     </section>
