@@ -77,7 +77,11 @@ watch(
 )
 
 const handleFilesUpdate = (fileItems) => {
+    console.log('handleFilesUpdate fired:', fileItems)
+    
     const files = fileItems.map((item) => item.file).filter(Boolean)
+    console.log('files after map:', files)
+    
     if (!files.length) {
         emit('update:src', null)
         return

@@ -5,6 +5,7 @@ namespace App\Http\Controllers;
 use App\Actions\UpdateProfileImage;
 use App\Http\Requests\ProfileUpdateRequest;
 use Illuminate\Http\RedirectResponse;
+use Illuminate\Support\Facades\Storage;
 use Illuminate\Http\Request;
 use Inertia\Response;
 
@@ -24,6 +25,10 @@ abstract class ProfileBaseController extends Controller
 
         if ($request->hasFile('image')) {
             $user->image = UpdateProfileImage::run($user, $request->file('image'));
+        }elseif ($request->input('image') === null && $user->image) {
+            // Removeu a imagem — apaga do storage e limpa a coluna
+            Storage::disk('public')->delete($user->image);
+            $user->image = null;
         }
 
         // Despacha o Job para o Horizon otimizar em background
