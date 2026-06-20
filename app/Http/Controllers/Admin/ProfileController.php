@@ -2,9 +2,8 @@
 
 namespace App\Http\Controllers\Admin;
 
-use App\Actions\OptimizeImage;
-use App\Http\Controllers\Controller;
-use App\Http\Requests\ProfileUpdateRequest;
+use App\Http\Controllers\ProfileBaseController;
+
 use Illuminate\Contracts\Auth\MustVerifyEmail;
 use Illuminate\Http\RedirectResponse;
 use Illuminate\Http\Request;
@@ -16,7 +15,7 @@ use Inertia\Response;
 use Illuminate\Support\Facades\Storage;
 use App\Traits\FileUploadTrait;
 
-class ProfileController extends Controller
+class ProfileController extends ProfileBaseController
 {
 
     use FileUploadTrait;
@@ -34,45 +33,6 @@ class ProfileController extends Controller
             'updatePasswordUrl' => 'admin.password.update',
             'deleteUserUrl' => 'admin.profile.destroy',
         ]);
-    }
-
-    /**
-     * Update the user's profile information.
-     */
-    public function update(ProfileUpdateRequest $request): RedirectResponse
-    {
-        $user = $request->user();
-        // $user->fill($request->validated());
-        $user->fill($request->safe()->except('image'));
-
-        if ($user->isDirty('email')) {
-            $user->email_verified_at = null;
-        }
-
-        // Add or Replace
-        $oldImagePath = $user->getOriginal('image');
-
-        if ($request->hasFile('image')) {
-            // 1. Guarda o ficheiro bruto (temporário)
-            $rawPath = $this->handleFileUpload(
-                $request->file('image'),
-                null,
-                'profile_images',
-                'public'
-            );
-
-            // 2. Apaga o antigo manualmente (agora que o trait não o faz)
-            if ($oldImagePath) {
-                Storage::disk('public')->delete($oldImagePath);
-            }
-
-            // 3. Atualiza com o path bruto (será substituído pelo Job)
-            $user->image = OptimizeImage::run($rawPath, 'profile_images');
-        }
-
-        $user->save();
-
-        return back()->with('success', 'Profile updated successfully.');
     }
 
     /**

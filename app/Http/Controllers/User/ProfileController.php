@@ -2,24 +2,21 @@
 
 namespace App\Http\Controllers\User;
 
-use App\Actions\OptimizeImage;
-use App\Http\Controllers\Controller;
-use App\Http\Requests\ProfileUpdateRequest;
-use App\Jobs\ProcessImageOptimization;
+use App\Http\Controllers\ProfileBaseController;
+
 use Illuminate\Contracts\Auth\MustVerifyEmail;
 use Illuminate\Http\RedirectResponse;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\Auth;
 use Illuminate\Support\Facades\Redirect;
-use Illuminate\Support\Facades\Log;
+use Illuminate\Support\Facades\Storage;
+
 use Inertia\Inertia;
 use Inertia\Response;
 
-use Illuminate\Support\Facades\Storage;
-use App\Models\User;
 use App\Traits\FileUploadTrait;
 
-class ProfileController extends Controller
+class ProfileController extends ProfileBaseController
 {
 
     use FileUploadTrait;
@@ -29,11 +26,6 @@ class ProfileController extends Controller
      */
     public function edit(Request $request): Response
     {
-        /* return Inertia::render('Profile/Edit', [
-            'mustVerifyEmail' => $request->user() instanceof MustVerifyEmail,
-            'status' => session('status'),
-            'imageUrl' => $request->user()->image ? Storage::disk('public')->url($request->user()->image) : null,
-        ]); */
         if ($request->user()->userType->id === 2) {
             return Inertia::render('Vendor/Profile/Edit', [
                 'mustVerifyEmail' => $request->user() instanceof MustVerifyEmail,
@@ -43,61 +35,12 @@ class ProfileController extends Controller
                 'updatePasswordUrl' => 'password.update',
                 'deleteUserUrl' => 'profile.destroy',
             ]);
-        } else {
-            return Inertia::render('Profile/Edit', [
-                'mustVerifyEmail' => $request->user() instanceof MustVerifyEmail,
-                'status' => session('status'),
-                'imageUrl' => $request->user()->image ? Storage::disk('public')->url($request->user()->image) : null
-            ]);
         }
-    }
-
-    /**
-     * Update the user's profile information.
-     */
-    public function update(ProfileUpdateRequest $request): RedirectResponse
-    {
-        Log::info('ProfileController update called');
-        Log::info('Has image:', ['has_image' => $request->hasFile('image')]);
-        Log::info('Files:', ['files' => $request->allFiles()]);
-
-        $user = $request->user();
-        // $user->fill($request->validated());
-        $user->fill($request->safe()->except('image'));
-
-        if ($user->isDirty('email')) {
-            $user->email_verified_at = null;
-        }
-
-        // Add or Replace
-        $oldImagePath = $user->getOriginal('image');
-
-        if ($request->hasFile('image')) {
-            // 1. Guarda o ficheiro bruto (temporário)
-            $rawPath = $this->handleFileUpload(
-                $request->file('image'),
-                null,
-                'profile_images',
-                'public'
-            );
-
-            // 2. Apaga o antigo manualmente (agora que o trait não o faz)
-            if ($oldImagePath) {
-                Storage::disk('public')->delete($oldImagePath);
-            }
-
-            // 3. Atualiza com o path bruto (será substituído pelo Job)
-            $user->image = OptimizeImage::run($rawPath, 'profile_images');
-        }
-
-        $user->save();
-
-        // 4. Despacha o Job para o Horizon otimizar em background
-        // if ($request->hasFile('image') && $user->image) {
-        //     ProcessImageOptimization::dispatch($user, 'image', 'profile_images');
-        // }
-
-        return back()->with('success', 'Profile updated successfully.');
+        return Inertia::render('Profile/Edit', [
+            'mustVerifyEmail' => $request->user() instanceof MustVerifyEmail,
+            'status' => session('status'),
+            'imageUrl' => $request->user()->image ? Storage::disk('public')->url($request->user()->image) : null
+        ]);
     }
 
     /**
