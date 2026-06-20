@@ -7,9 +7,6 @@ use Illuminate\Support\Facades\Storage;
 
 trait FileUploadTrait
 {
-    /**
-     * Upload a file and return its stored path.
-     */
     public function handleFileUpload(
         ?UploadedFile $file,
         ?string $oldPath = null,
@@ -17,22 +14,15 @@ trait FileUploadTrait
         string $disk = 'public',
         bool $deleteOldIfReplacing = true
     ): ?string {
-
-        if (!$file) {
-            return null;
-        }
-        if (!$file->isValid()) {
+        if (!$file || !$file->isValid()) {
             return null;
         }
 
-        // Store new file
-        $newPath = $file->store($directory, $disk);
+        $filename = $file->hashName();
+        $path = $directory . '/' . $filename;
 
-        // Delete old file if replacing
-        if ($deleteOldIfReplacing && $oldPath) {
-            Storage::disk($disk)->delete($oldPath);
-        }
+        Storage::disk($disk)->put($path, file_get_contents($file));
 
-        return $newPath;
+        return $path; // 'profile_images/filename.jpg' — sem prefixo do disco
     }
 }

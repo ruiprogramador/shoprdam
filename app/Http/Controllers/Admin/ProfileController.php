@@ -2,6 +2,7 @@
 
 namespace App\Http\Controllers\Admin;
 
+use App\Actions\OptimizeImage;
 use App\Http\Controllers\Controller;
 use App\Http\Requests\ProfileUpdateRequest;
 use Illuminate\Contracts\Auth\MustVerifyEmail;
@@ -49,12 +50,25 @@ class ProfileController extends Controller
         }
 
         // Add or Replace
-        $user->image = $this->handleFileUpload(
-            $request->file('image'),
-            $user->getOriginal('image'),
-            'profile_images',
-            'public'
-        );
+        $oldImagePath = $user->getOriginal('image');
+
+        if ($request->hasFile('image')) {
+            // 1. Guarda o ficheiro bruto (temporário)
+            $rawPath = $this->handleFileUpload(
+                $request->file('image'),
+                null,
+                'profile_images',
+                'public'
+            );
+
+            // 2. Apaga o antigo manualmente (agora que o trait não o faz)
+            if ($oldImagePath) {
+                Storage::disk('public')->delete($oldImagePath);
+            }
+
+            // 3. Atualiza com o path bruto (será substituído pelo Job)
+            $user->image = OptimizeImage::run($rawPath, 'profile_images');
+        }
 
         $user->save();
 
