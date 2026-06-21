@@ -35,7 +35,7 @@ class ReviewKycAction
         $kyc->transitionToStatus($status, $reviewer, $notes);
 
         if ($action === 'approve') {
-            $kyc->update(['expires_at' => now()->addYears(config('kyc.expiration_years', 1))]); // Set expiration date for approved KYC
+            $kyc->update(['expires_at' => now()->addYears((int)config('kyc.expiration_years', 1))]); // Set expiration date for approved KYC
         }
 
         match ($action) {
