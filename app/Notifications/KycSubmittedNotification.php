@@ -7,6 +7,7 @@ use Illuminate\Contracts\Queue\ShouldQueue;
 use Illuminate\Notifications\Messages\MailMessage;
 use Illuminate\Notifications\Notification;
 use App\Models\Kyc;
+use App\Models\Translation;
 
 class KycSubmittedNotification extends Notification implements ShouldQueue
 {
@@ -27,20 +28,20 @@ class KycSubmittedNotification extends Notification implements ShouldQueue
      */
     public function via(object $notifiable): array
     {
-        // return ['mail'];
-        return ['database'];
+        return ['mail', 'database'];
     }
 
     /**
      * Get the mail representation of the notification.
      */
-    /* public function toMail(object $notifiable): MailMessage
+    public function toMail(object $notifiable): MailMessage
     {
         return (new MailMessage)
-            ->line('The introduction to the notification.')
-            ->action('Notification Action', url('/'))
-            ->line('Thank you for using our application!');
-    } */
+            ->subject(Translation::getText('notifications.kyc.submitted', 'en'))
+            ->line(Translation::getText('notifications.kyc.submitted.message', 'en', ['name' => $this->kyc->user->name]))
+            ->action('Ver KYC', url(route('admin.kyc.show', $this->kyc)))
+            ->line('Obrigado!');
+    }
 
     /**
      * Get the array representation of the notification.
@@ -61,7 +62,7 @@ class KycSubmittedNotification extends Notification implements ShouldQueue
         return [
             'kyc_id'    => $this->kyc->id,
             'vendor'    => $this->kyc->user->name,
-            'message'   => __('notifications.kyc.submitted', ['name' => $this->kyc->user->name]),
+            'message'   => __('notifications.kyc.submitted.message', ['name' => $this->kyc->user->name]),
         ];
     }
 }

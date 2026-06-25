@@ -4,8 +4,15 @@ return [
     'kyc' => [
         'salutation' => 'With best regards, :app_name',
 
-        'submitted' => 'The vendor :name has submitted a new KYC for review.',
-        'updated'   => 'The vendor :name has updated their KYC and is awaiting review.',
+        'submitted' => [
+            'subject' => 'New KYC Submission',
+            'message' => 'The vendor :name has submitted a new KYC for review.',
+        ],
+
+        'updated' => [
+            'subject' => 'KYC Updated',
+            'message' => 'The vendor :name has updated their KYC and is awaiting review.',
+        ],
 
         'approved' => [
             'subject'  => 'Your KYC has been approved',
