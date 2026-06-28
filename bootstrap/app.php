@@ -55,13 +55,6 @@ return Application::configure(basePath: dirname(__DIR__))
         ]);
 
     })
-    /*->withEvents(
-        listen: [
-            KycSubmitted::class => [
-                NotifyAdminKycSubmitted::class,
-            ],
-        ]
-    )*/
     ->withExceptions(function (Exceptions $exceptions): void {
         //
     })->create();
