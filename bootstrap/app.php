@@ -10,7 +10,7 @@ use App\Http\Middleware\RedirectIfAuthenticated;
 use App\Http\Middleware\Authenticate as Authenticate;
 use App\Http\Middleware\RoleMiddleware;
 use App\Http\Middleware\SetLocale;
-use App\Providers\KycSubmittedServiceProvider;
+use App\Providers\EventServiceProvider;
 use App\Providers\TranslationServiceProvider;
 use Illuminate\Support\Facades\Route;
 
@@ -34,7 +34,7 @@ return Application::configure(basePath: dirname(__DIR__))
     )
     ->withProviders([
         TranslationServiceProvider::class,
-        KycSubmittedServiceProvider::class,
+        EventServiceProvider::class,
     ])
     ->withMiddleware(function (Middleware $middleware): void {
         /*$middleware->web(append: [

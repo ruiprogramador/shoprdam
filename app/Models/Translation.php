@@ -130,18 +130,18 @@ class Translation extends Model
             ->toArray();
     }
 
-    public static function getText(string $key, string $locale = 'en', array $replacements = []): string
-    {
-        $translation = static::with(['values' => fn ($q) => $q->where('locale', $locale)])
-            ->where('key', $key)
-            ->first();
+    public static function getText(string $key, string $locale = 'en', array $replacements = [], string $variant = 'value'): string
+{
+    $translation = static::with(['values' => fn ($q) => $q->where('locale', $locale)])
+        ->where('key', $key)
+        ->first();
 
-        $value = $translation?->values->first()?->value ?? $key;
+    $value = $translation?->values->first()?->{$variant} ?? $key;
 
-        foreach ($replacements as $k => $v) {
-            $value = str_replace(":{$k}", $v, $value);
-        }
-
-        return $value;
+    foreach ($replacements as $k => $v) {
+        $value = str_replace(":{$k}", $v, $value);
     }
+
+    return $value;
+}
 }

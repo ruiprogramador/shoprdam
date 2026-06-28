@@ -37,10 +37,10 @@ class KycSubmittedNotification extends Notification implements ShouldQueue
     public function toMail(object $notifiable): MailMessage
     {
         return (new MailMessage)
-            ->subject(Translation::getText('notifications.kyc.submitted', 'en'))
+            ->subject(Translation::getText('notifications.kyc.submitted', 'en', ['name' => $this->kyc->user->name], 'value_short'))
             ->line(Translation::getText('notifications.kyc.submitted.message', 'en', ['name' => $this->kyc->user->name]))
-            ->action('Ver KYC', url(route('admin.kyc.show', $this->kyc)))
-            ->line('Obrigado!');
+            ->action(Translation::getText('notifications.kyc.show', 'en'), url(route('admin.kyc.show', $this->kyc)));
+            // ->line(Translation::getText('salutation', 'en', ['app_name' => config('app.name')]));
     }
 
     /**
@@ -62,7 +62,8 @@ class KycSubmittedNotification extends Notification implements ShouldQueue
         return [
             'kyc_id'    => $this->kyc->id,
             'vendor'    => $this->kyc->user->name,
-            'message'   => __('notifications.kyc.submitted.message', ['name' => $this->kyc->user->name]),
+            'message'   => Translation::getText('notifications.kyc.submitted.message', 'en', ['name' => $this->kyc->user->name]),
+            'action_url' => url(route('admin.kyc.show', $this->kyc)),
         ];
     }
 }

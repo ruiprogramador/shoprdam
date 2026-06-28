@@ -132,7 +132,7 @@ class KycController extends Controller
 
         $kyc = $this->updateKyc->execute($kyc, $request->validated());
 
-        KycUpdated::dispatch($kyc);
+        KycUpdated::dispatch($kyc); // Notification is sent to the admin when a KYC is updated, only when it's submitted for the first time.
 
         return redirect()->route('vendor.kyc.show')
             ->with('success', __('kyc.updated'));
