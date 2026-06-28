@@ -105,4 +105,41 @@ Route::middleware('auth:admin')
         });
 
         Route::get('logs', [\Rap2hpoutre\LaravelLogViewer\LogViewerController::class, 'index']);
+
+        Route::get('/preview/kyc-submitted', function () {
+            $kyc = App\Models\Kyc::with('user')->first();
+            $notification = new App\Notifications\KycSubmittedNotification($kyc);
+            $mailMessage = $notification->toMail(new App\Models\Admin());
+            return response($mailMessage->render());
+        })->withoutMiddleware([\App\Http\Middleware\HandleInertiaRequests::class])->name('preview.kyc-submitted');  
+
+        Route::get('/preview/kyc-approved', function () {
+            $kyc = App\Models\Kyc::with('user')->first();
+            $kyc->expires_at = now()->addYear(); // fake para preview
+            $notification = new App\Notifications\KycApprovedNotification($kyc);
+            $mailMessage = $notification->toMail(new App\Models\Admin());
+            return response($mailMessage->render());
+        })->withoutMiddleware([\App\Http\Middleware\HandleInertiaRequests::class])->name('preview.kyc-approved');
+
+        Route::get('/preview/kyc-rejected', function () {
+            $kyc = App\Models\Kyc::with('user')->first();
+            $kyc->rejection_reason = 'Document is not clear'; // fake para preview
+            $notification = new App\Notifications\KycRejectedNotification($kyc);
+            $mailMessage = $notification->toMail(new App\Models\Admin());
+            return response($mailMessage->render());
+        })->withoutMiddleware([\App\Http\Middleware\HandleInertiaRequests::class])->name('preview.kyc-rejected');
+
+        Route::get('/preview/kyc-updated', function () {
+            $kyc = App\Models\Kyc::with('user')->first();
+            $notification = new App\Notifications\KycUpdatedNotification($kyc);
+            $mailMessage = $notification->toMail(new App\Models\Admin());
+            return response($mailMessage->render());
+        })->withoutMiddleware([\App\Http\Middleware\HandleInertiaRequests::class])->name('preview.kyc-updated');
+
+        Route::get('/preview/kyc-expired', function () {
+            $kyc = App\Models\Kyc::with('user')->first();
+            $notification = new App\Notifications\KycExpiredNotification($kyc);
+            $mailMessage = $notification->toMail(new App\Models\Admin());
+            return response($mailMessage->render());
+        })->withoutMiddleware([\App\Http\Middleware\HandleInertiaRequests::class])->name('preview.kyc-expired');
     });
