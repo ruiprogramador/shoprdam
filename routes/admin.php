@@ -142,4 +142,11 @@ Route::middleware('auth:admin')
             $mailMessage = $notification->toMail(new App\Models\Admin());
             return response($mailMessage->render());
         })->withoutMiddleware([\App\Http\Middleware\HandleInertiaRequests::class])->name('preview.kyc-expired');
+
+        Route::get('/preview/kyc-expiring-soon', function () {
+            $kyc = App\Models\Kyc::with('user')->first();
+            $notification = new App\Notifications\KycExpiringSoonNotification($kyc);
+            $mailMessage = $notification->toMail(new App\Models\Admin());
+            return response($mailMessage->render());
+        })->withoutMiddleware([\App\Http\Middleware\HandleInertiaRequests::class])->name('preview.kyc-expiring-soon');
     });
