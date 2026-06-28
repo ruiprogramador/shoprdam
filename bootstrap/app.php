@@ -1,6 +1,5 @@
 <?php
 
-use App\Events\KycSubmitted;
 use App\Http\Middleware\HandleInertiaRequests;
 use Illuminate\Foundation\Application;
 use Illuminate\Foundation\Configuration\Exceptions;
