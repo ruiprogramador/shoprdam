@@ -3,6 +3,6 @@
 return [
     App\Providers\AppServiceProvider::class,
     App\Providers\HorizonServiceProvider::class,
-    App\Providers\KycSubmittedServiceProvider::class,
+    App\Providers\EventServiceProvider::class,
     App\Providers\TranslationServiceProvider::class,
 ];
