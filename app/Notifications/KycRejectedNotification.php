@@ -35,7 +35,7 @@ class KycRejectedNotification extends Notification implements ShouldQueue
     {
         return (new MailMessage)
             ->subject(Translation::getText('notifications.kyc.rejected.subject', 'en'))
-            ->greeting(Translation::getText('notifications.kyc.rejected.greeting', 'en', ['name' => $this->kyc->user->name], 'value'))
+            ->greeting(Translation::getText('notifications.greeting', 'en', ['name' => $this->kyc->user->name], 'value'))
             ->line(Translation::getText('notifications.kyc.rejected.message', 'en'))
             ->lineIf(
                 filled($this->kyc->rejection_reason),

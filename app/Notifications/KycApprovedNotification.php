@@ -38,7 +38,7 @@ class KycApprovedNotification extends Notification implements ShouldQueue
     {
         return (new MailMessage)
             ->subject(Translation::getText('notifications.kyc.approved.subject', 'en'))
-            ->greeting(Translation::getText('notifications.kyc.approved.greeting', 'en', ['name' => $this->kyc->user->name], 'value'))
+            ->greeting(Translation::getText('notifications.greeting', 'en', ['name' => $this->kyc->user->name], 'value'))
             ->line(Translation::getText('notifications.kyc.approved.message', 'en'))
             ->line(Translation::getText('notifications.kyc.approved.expiration', 'en', ['date' => $this->kyc->expires_at?->format('d/m/Y')]))
             ->action(Translation::getText('notifications.kyc.approved.action', 'en'), url(route('admin.dashboard')))
