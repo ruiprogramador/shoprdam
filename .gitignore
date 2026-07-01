@@ -25,5 +25,5 @@ yarn-error.log
 /.nova
 /.vscode
 /.zed
-dump.rdbworld_data.sql
 dump.rdb
+world_data.sql
