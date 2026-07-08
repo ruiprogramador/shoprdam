@@ -1,5 +1,16 @@
 <?php
 
+/*
+|--------------------------------------------------------------------------
+| IMPORTANT
+|--------------------------------------------------------------------------
+|
+| These records are referenced throughout the application by their slug.
+| Existing slugs must never be changed in production.
+| New store statuses may be added in future releases.
+|
+*/
+
 namespace Database\Seeders;
 
 use Illuminate\Support\Facades\DB;
@@ -19,10 +30,12 @@ class StoreStatusSeeder extends Seeder
             ['name' => 'Suspended', 'slug' => 'suspended', 'color' => '#EF4444', 'sort_order' => 40, 'description' => 'Store suspended by admin'],
         ];
 
+        $timestamp = now();
+
         foreach ($statuses as $status) {
             DB::table('store_statuses')->updateOrInsert(
                 ['slug' => $status['slug']],
-                array_merge($status, ['is_active' => true, 'created_at' => now(), 'updated_at' => now()])
+                array_merge($status, ['is_active' => true, 'created_at' => $timestamp, 'updated_at' => $timestamp])
             );
         }
     }

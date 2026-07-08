@@ -1,5 +1,16 @@
 <?php
 
+/*
+|--------------------------------------------------------------------------
+| IMPORTANT
+|--------------------------------------------------------------------------
+|
+| These records are referenced throughout the application by their slug.
+| Existing slugs must never be changed in production.
+| New transaction statuses may be added in future releases.
+|
+*/
+
 namespace Database\Seeders;
 
 use Illuminate\Support\Facades\DB;
@@ -20,10 +31,12 @@ class TransactionStatusSeeder extends Seeder
             ['name' => 'Reversed',  'slug' => 'reversed',  'sort_order' => 50, 'description' => 'Transaction was reversed'],
         ];
 
+        $timestamp = now();
+
         foreach ($statuses as $status) {
             DB::table('transaction_statuses')->updateOrInsert(
                 ['slug' => $status['slug']],
-                array_merge($status, ['is_active' => true, 'created_at' => now(), 'updated_at' => now()])
+                array_merge($status, ['is_active' => true, 'created_at' => $timestamp, 'updated_at' => $timestamp])
             );
         }
     }
