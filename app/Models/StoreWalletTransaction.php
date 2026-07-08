@@ -79,7 +79,7 @@ class StoreWalletTransaction extends Model
 
     public function isReversal(): bool
     {
-        return filled($this->related_transaction_id);
+        return !is_null($this->related_transaction_id);
     }
 
     public function isCompleted(): bool

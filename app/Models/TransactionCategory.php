@@ -5,10 +5,13 @@ namespace App\Models;
 use App\Enums\TransactionDirection;
 use Illuminate\Database\Eloquent\Model;
 use Illuminate\Database\Eloquent\Relations\HasMany;
-use Illuminate\Database\Eloquent\Builder;
+use App\Traits\HasSlugLookup;
+use App\Traits\HasActiveScope;
 
 class TransactionCategory extends Model
 {
+    use HasSlugLookup, HasActiveScope;
+
     protected $fillable = ['name', 'slug', 'direction', 'is_active', 'description'];
 
     protected $casts = [
@@ -25,20 +28,6 @@ class TransactionCategory extends Model
         return $this->hasMany(StoreWalletTransaction::class);
     }
 
-    public static function bySlug(string $slug): ?static
-    {
-        return static::query()
-            ->where('slug', $slug)
-            ->first();
-    }
-
-    public static function bySlugOrFail(string $slug): static
-    {
-        return static::query()
-            ->where('slug', $slug)
-            ->firstOrFail();
-    }
-
     public function isCredit(): bool
     {
         return $this->direction === TransactionDirection::Credit;
@@ -47,10 +36,5 @@ class TransactionCategory extends Model
     public function isDebit(): bool
     {
         return $this->direction === TransactionDirection::Debit;
-    }
-
-    public function scopeActive(Builder $query): Builder
-    {
-        return $query->where('is_active', true);
     }
 }

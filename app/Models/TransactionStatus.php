@@ -5,9 +5,14 @@ namespace App\Models;
 use Illuminate\Database\Eloquent\Model;
 use Illuminate\Database\Eloquent\Relations\HasMany;
 use Illuminate\Database\Eloquent\Builder;
+use App\Traits\HasSlugLookup;
+use App\Traits\HasActiveScope;
+use App\Traits\HasOrderedScope;
 
 class TransactionStatus extends Model
 {
+    use HasSlugLookup, HasActiveScope, HasOrderedScope;
+
     protected $fillable = ['name', 'slug', 'is_active', 'description', 'sort_order'];
 
     protected $casts = [
@@ -21,29 +26,5 @@ class TransactionStatus extends Model
     public function transactions(): HasMany
     {
         return $this->hasMany(StoreWalletTransaction::class);
-    }
-
-    public static function bySlug(string $slug): ?static
-    {
-        return static::query()
-            ->where('slug', $slug)
-            ->first();
-    }
-
-    public static function bySlugOrFail(string $slug): static
-    {
-        return static::query()
-            ->where('slug', $slug)
-            ->firstOrFail();
-    }
-
-    public function scopeActive(Builder $query): Builder
-    {
-        return $query->where('is_active', true);
-    }
-
-    public function scopeOrdered(Builder $query): Builder
-    {
-        return $query->orderBy('sort_order');
     }
 }
