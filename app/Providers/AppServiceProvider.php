@@ -6,25 +6,21 @@ use Illuminate\Support\Facades\Vite;
 use Illuminate\Support\ServiceProvider;
 use Illuminate\Support\Facades\Gate;
 use App\Models\Kyc;
+use App\Models\Store;
+use App\Observers\StoreObserver;
 use App\Policies\KycPolicy;
 use App\Policies\AdminKycPolicy;
 
 class AppServiceProvider extends ServiceProvider
 {
     /**
-     * Register any application services.
-     */
-    public function register(): void
-    {
-        //
-    }
-
-    /**
      * Bootstrap any application services.
      */
     public function boot(): void
     {
         Vite::prefetch(concurrency: 3);
+
+        Store::observe(StoreObserver::class);
 
         Gate::policy(Kyc::class, KycPolicy::class);
 

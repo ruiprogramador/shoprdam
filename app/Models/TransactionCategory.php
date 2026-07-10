@@ -7,12 +7,13 @@ use Illuminate\Database\Eloquent\Model;
 use Illuminate\Database\Eloquent\Relations\HasMany;
 use App\Traits\HasSlugLookup;
 use App\Traits\HasActiveScope;
+use App\Traits\HasOrderedScope;
 
 class TransactionCategory extends Model
 {
-    use HasSlugLookup, HasActiveScope;
+    use HasSlugLookup, HasActiveScope, HasOrderedScope;
 
-    protected $fillable = ['name', 'slug', 'direction', 'is_active', 'description'];
+    protected $fillable = ['name', 'slug', 'direction', 'sort_order', 'is_active', 'description'];
 
     protected $casts = [
         'is_active' => 'boolean',
