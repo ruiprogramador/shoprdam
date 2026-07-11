@@ -3,7 +3,7 @@
 namespace App\Observers;
 
 use App\Models\Store;
-use App\Wallet\Services\WalletService;
+use App\Services\Wallet\WalletService;
 use Illuminate\Support\Str;
 
 class StoreObserver

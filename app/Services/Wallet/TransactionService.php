@@ -1,6 +1,6 @@
 <?php
 
-namespace App\Wallet\Services;
+namespace App\Services\Wallet;
 
 use App\Models\StoreWallet;
 use App\Models\StoreWalletTransaction;
