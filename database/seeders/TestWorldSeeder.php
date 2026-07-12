@@ -20,5 +20,18 @@ class TestWorldSeeder extends Seeder
         DB::table('cities')->insert([
             ['id' => 91876, 'country_id' => 177, 'state_id' => 3282, 'name' => 'Cantanhede', 'country_code' => 'PT'],
         ]);
+
+        DB::table('currencies')->insert([
+            'id' => 2,
+            'country_id' => 177,
+            'name' => 'Euro',
+            'code' => 'EUR',
+            'precision' => 2,
+            'symbol' => '€',
+            'symbol_native' => '€',
+            'symbol_first' => 1,
+            'decimal_mark' => '.',
+            'thousands_separator' => ',',
+        ]);
     }
 }
