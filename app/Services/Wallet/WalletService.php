@@ -36,7 +36,7 @@ class WalletService
                     'currency_id' => $currencyId,
                 ],
                 [
-                    'balance' => 0,
+                    'balance' => '0.00',
                 ]
             );
         });
