@@ -10,7 +10,7 @@ use App\Enums\TransactionSource;
 use Illuminate\Support\Facades\DB;
 use RuntimeException;
 
-class TransactionService
+class WalletTransactionService
 {
     /**
      * Record a new transaction against a wallet, adjusting its balance.
