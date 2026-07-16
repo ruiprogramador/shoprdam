@@ -11,7 +11,14 @@ it('creates a reversal transaction and restores the wallet balance', function ()
 
     $sale = $service->record($wallet, 'sale', '100.00');
 
-    $reversal = $service->reverse($sale, 'customer_refund');
+    $reversal = $service
+        ->reverse($sale, 'customer_refund')
+        ->load([
+            'category',
+            'status',
+            'storeWallet',
+            'relatedTransaction',
+        ]);
 
     expect($reversal->id)
         ->not->toBe($sale->id)
@@ -25,14 +32,15 @@ it('creates a reversal transaction and restores the wallet balance', function ()
         ->and($reversal->isReversal())->toBeTrue()
         ->and($reversal->storeWallet->is($wallet))->toBeTrue();
 
-    $wallet = $wallet->fresh();
+    $wallet = $wallet->fresh()->loadCount('transactions');
 
-    expect($wallet->balance)
-        ->toBe('0.00')
-        ->and($wallet->transactions()->count())
-        ->toBe(2);
+    expect($wallet->balance)->toBe('0.00')
+        ->and($wallet->transactions_count)->toBe(2);
 
-    $sale = $sale->fresh()->load('childTransactions');
+    $sale = $sale->fresh()->load([
+        'status',
+        'childTransactions',
+    ]);
 
     expect($sale->amount)
         ->toBe('100.00')
@@ -92,5 +100,8 @@ it('cannot reverse the same transaction twice', function () {
             'This transaction has already been reversed.'
         );
 
-    expect($wallet->fresh()->transactions()->count())->toBe(2);
+    $wallet = $wallet->fresh()->loadCount('transactions');
+
+    expect($wallet->balance)->toBe('0.00')
+        ->and($wallet->transactions_count)->toBe(2);
 });

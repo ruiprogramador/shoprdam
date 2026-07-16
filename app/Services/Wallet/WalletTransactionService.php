@@ -121,8 +121,8 @@ class WalletTransactionService
             $description,
             $options
         ) {
-
             $original = StoreWalletTransaction::query()
+                ->with('storeWallet')
                 ->lockForUpdate()
                 ->findOrFail($original->id);
 
@@ -131,7 +131,7 @@ class WalletTransactionService
                     'Cannot reverse a transaction that is itself a reversal.'
                 );
             }
-
+            
             if (! $original->isCompleted()) {
                 throw new RuntimeException(
                     'Only completed transactions can be reversed.'
