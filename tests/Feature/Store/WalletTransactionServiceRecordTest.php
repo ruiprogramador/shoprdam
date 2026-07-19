@@ -3,6 +3,7 @@
 use App\Models\Store;
 use App\Services\Wallet\WalletTransactionService;
 use App\Enums\TransactionSource;
+use App\Models\Admin;
 
 it('records a credit transaction and increases the wallet balance', function () {
     $service = app(WalletTransactionService::class);
@@ -20,7 +21,8 @@ it('records a credit transaction and increases the wallet balance', function () 
         ->and($transaction->status->slug)->toBe('completed')
         ->and($wallet->balance)->toBe('100.00')
         ->and($transaction->source)->toBe(TransactionSource::System)
-        ->and($wallet->last_transaction_at)->toBeInstanceOf(\Illuminate\Support\Carbon::class);
+        ->and($wallet->last_transaction_at)->toBeInstanceOf(\Illuminate\Support\Carbon::class)
+        ->and($wallet->transactions()->count())->toBe(1);
 });
 
 it('records a debit transaction and decreases the wallet balance', function () {
@@ -36,7 +38,8 @@ it('records a debit transaction and decreases the wallet balance', function () {
         ->and($transaction->balance_after)->toBe('90.00')
         ->and($wallet->fresh()->balance)->toBe('90.00')
         ->and($transaction->status->slug)->toBe('completed')
-        ->and($transaction->source)->toBe(TransactionSource::System);
+        ->and($transaction->source)->toBe(TransactionSource::System)
+        ->and($wallet->transactions()->count())->toBe(2);
 });
 
 it('throws an exception when amount is zero or negative', function () {
@@ -100,6 +103,7 @@ it('links a referenceable model to the transaction', function () {
     expect($transaction->store_wallet_id)->toBe($wallet->id)
         ->and($transaction->referenceable_type)->toBe($store->getMorphClass())
         ->and($transaction->referenceable_id)->toBe($store->id)
+        ->and($transaction->referenceable->is($store))->toBeTrue()
         ->and($transaction->category->slug)->toBe('sale');
 });
 
@@ -128,7 +132,9 @@ it('records a pending transaction without affecting the wallet balance or last t
         ->and($wallet->transactions_count)
         ->toBe(1)
         ->and($wallet->last_transaction_at)
-        ->toBe($lastTransactionAtBefore);
+        ->toBe($lastTransactionAtBefore)
+        ->and($transaction->source)
+        ->toBe(TransactionSource::System);
 });
 
 it('returns existing transaction for duplicated external reference', function () {
@@ -158,7 +164,9 @@ it('returns existing transaction for duplicated external reference', function ()
         ->and($wallet->fresh()->balance)
         ->toBe('100.00')
         ->and($wallet->transactions()->count())
-        ->toBe(1);
+        ->toBe(1)
+        ->and($second->status->slug)
+        ->toBe('completed');
 });
 
 it('does not apply idempotency when only one external identifier is provided', function () {
@@ -201,13 +209,14 @@ it('stores the creator of the transaction', function () {
 
     $store = Store::factory()->create();
     $wallet = $store->wallets()->first();
+    $admin = Admin::factory()->create();
 
     $transaction = $service->record($wallet, 'sale', '50.00', [
-        'created_by' => 123,
+        'created_by' => $admin->id,
     ]);
 
-    expect($transaction->created_by)
-        ->toBe(123)
+    expect($transaction->fresh()->created_by)
+        ->toBe($admin->id)
         ->and($transaction->source)
         ->toBe(TransactionSource::System)
         ->and($transaction->status->slug)
@@ -226,4 +235,21 @@ it('throws when using an unknown transaction status', function () {
         'status' => 'unknown',
     ]))
         ->toThrow(\RuntimeException::class);
+});
+
+it('links the creator relationship', function () {
+    $service = app(WalletTransactionService::class);
+
+    $store = Store::factory()->create();
+    $wallet = $store->wallets()->first();
+
+    $admin = Admin::factory()->create();
+
+    $transaction = $service->record($wallet, 'sale', '50.00', [
+        'created_by' => $admin->id,
+    ]);
+
+    expect($transaction->fresh())->created_by->toBe($admin->id);
+
+    expect($transaction->fresh()->createdBy)->is($admin)->toBeTrue();
 });
