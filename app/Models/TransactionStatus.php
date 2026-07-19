@@ -27,4 +27,19 @@ class TransactionStatus extends Model
     {
         return $this->hasMany(StoreWalletTransaction::class);
     }
+
+    public function isPending(): bool
+    {
+        return $this->slug === 'pending';
+    }
+
+    public function isCompleted(): bool
+    {
+        return $this->slug === 'completed';
+    }
+
+    public function isFailed(): bool
+    {
+        return $this->slug === 'failed';
+    }
 }

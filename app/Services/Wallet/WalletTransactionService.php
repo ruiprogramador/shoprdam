@@ -36,7 +36,7 @@ class WalletTransactionService
         $statusSlug = $options['status'] ?? 'completed';
         $status = TransactionStatus::bySlugOrFail($statusSlug);
 
-        return DB::transaction(function () use ($wallet, $category, $status, $amount, $options) { 
+        return DB::transaction(function () use ($wallet, $category, $status, $statusSlug, $amount, $options) {
             $externalProvider = $options['external_provider'] ?? null;
             $externalReference = $options['external_reference'] ?? null;
 
@@ -52,17 +52,23 @@ class WalletTransactionService
                 }
             }
 
-            // Lock the wallet row to prevent race conditions on concurrent transactions
             $lockedWallet = StoreWallet::query()
-                            ->lockForUpdate()
-                            ->findOrFail($wallet->id);
+                ->lockForUpdate()
+                ->findOrFail($wallet->id);
 
-            $newBalance = $category->isCredit()
-                ? bcadd($lockedWallet->balance, $amount, 2)
-                : bcsub($lockedWallet->balance, $amount, 2);
+            $isCompleted = $status->isCompleted();
 
-            if (bccomp($newBalance, '0', 2) < 0) {
-                throw new RuntimeException('Insufficient wallet balance for this transaction.');
+            if ($isCompleted) {
+                $newBalance = $category->isCredit()
+                    ? bcadd($lockedWallet->balance, $amount, 2)
+                    : bcsub($lockedWallet->balance, $amount, 2);
+
+                if (bccomp($newBalance, '0', 2) < 0) {
+                    throw new RuntimeException('Insufficient wallet balance for this transaction.');
+                }
+            } else {
+                // Pending (or any non-completed) transactions do not affect the balance yet
+                $newBalance = $lockedWallet->balance;
             }
 
             $referenceable = $options['referenceable'] ?? null;
@@ -85,7 +91,6 @@ class WalletTransactionService
                     'created_by'              => $options['created_by'] ?? null,
                 ]);
             } catch (QueryException $e) {
-
                 if ($externalProvider && $externalReference && $e->getCode() === '23000') {
                     return StoreWalletTransaction::query()
                         ->where('external_provider', $externalProvider)
@@ -96,10 +101,12 @@ class WalletTransactionService
                 throw $e;
             }
 
-            $lockedWallet->update([
-                'balance'             => $newBalance,
-                'last_transaction_at' => now(),
-            ]);
+            if ($isCompleted) {
+                $lockedWallet->update([
+                    'balance'             => $newBalance,
+                    'last_transaction_at' => now(),
+                ]);
+            }
 
             return $transaction;
         });
@@ -189,6 +196,54 @@ class WalletTransactionService
                 'description' => $reason
                     ? trim(($transaction->description ?? '') . ' | ' . $reason)
                     : $transaction->description,
+            ]);
+
+            return $transaction->fresh();
+        });
+    }
+
+    /**
+     * Confirm a pending transaction, applying its effect to the wallet balance.
+     * Use this when a transaction was recorded as pending and is now confirmed
+     * (e.g. a payment gateway webhook confirms the charge succeeded).
+     */
+    public function confirm(StoreWalletTransaction $transaction): StoreWalletTransaction
+    {
+        return DB::transaction(function () use ($transaction) {
+            $transaction = StoreWalletTransaction::query()
+                ->with([
+                    'category',
+                    'storeWallet',
+                ])
+                ->lockForUpdate()
+                ->findOrFail($transaction->id);
+
+            if (!$transaction->isPending()) {
+                throw new RuntimeException('Only pending transactions can be confirmed.');
+            }
+
+            $lockedWallet = StoreWallet::query()
+                ->lockForUpdate()
+                ->findOrFail($transaction->store_wallet_id);
+
+            $newBalance = $transaction->category->isCredit()
+                ? bcadd($lockedWallet->balance, $transaction->amount, 2)
+                : bcsub($lockedWallet->balance, $transaction->amount, 2);
+
+            if (bccomp($newBalance, '0', 2) < 0) {
+                throw new RuntimeException('Insufficient wallet balance to confirm this transaction.');
+            }
+
+            $completedStatus = TransactionStatus::bySlugOrFail('completed');
+
+            $transaction->update([
+                'transaction_status_id' => $completedStatus->id,
+                'balance_after'         => $newBalance,
+            ]);
+
+            $lockedWallet->update([
+                'balance'             => $newBalance,
+                'last_transaction_at' => now(),
             ]);
 
             return $transaction->fresh();
