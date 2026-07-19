@@ -137,6 +137,22 @@ it('records a pending transaction without affecting the wallet balance or last t
         ->toBe(TransactionSource::System);
 });
 
+it('ignores dirty in-memory wallet changes when recording a transaction', function () {
+    $service = app(WalletTransactionService::class);
+
+    $store = Store::factory()->create();
+    $wallet = $store->wallets()->first();
+
+    $wallet->balance = '9999.00';
+
+    $transaction = $service->record($wallet, 'sale', '25.00');
+
+    expect($transaction->balance_after)->toBe('25.00')
+        ->and($transaction->status->slug)->toBe('completed')
+        ->and($wallet->fresh()->balance)->toBe('25.00')
+        ->and($wallet->fresh()->last_transaction_at)->not->toBeNull();
+});
+
 it('returns existing transaction for duplicated external reference', function () {
     $service = app(WalletTransactionService::class);
 
@@ -237,6 +253,120 @@ it('throws when using an unknown transaction status', function () {
         ->toThrow(\RuntimeException::class);
 });
 
+it('throws when using an unknown transaction category', function () {
+    $service = app(WalletTransactionService::class);
+
+    $store = Store::factory()->create();
+    $wallet = $store->wallets()->first();
+
+    $walletSnapshot = $wallet->fresh();
+
+    expect(fn () => $service->record($wallet, 'drop-table', '10.00'))
+        ->toThrow(\RuntimeException::class);
+
+    expect($wallet->fresh()->balance)->toBe($walletSnapshot->balance)
+        ->and($wallet->transactions()->count())->toBe(0)
+        ->and($wallet->fresh()->last_transaction_at)->toBe($walletSnapshot->last_transaction_at);
+});
+
+it('promotes existing pending transaction to completed for duplicated external reference', function () {
+    $service = app(WalletTransactionService::class);
+
+    $store = Store::factory()->create();
+    $wallet = $store->wallets()->first();
+
+    $first = $service->record($wallet, 'sale', '100.00', [
+        'status' => 'pending',
+        'external_provider' => 'stripe',
+        'external_reference' => 'pi_pending_123',
+    ]);
+
+    $walletSnapshot = $wallet->fresh();
+
+    $second = $service->record($wallet, 'sale', '250.00', [
+        'status' => 'completed',
+        'external_provider' => 'stripe',
+        'external_reference' => 'pi_pending_123',
+    ]);
+
+    expect($second->id)->toBe($first->id)
+        ->and($second->status->slug)->toBe('completed')
+        ->and($second->balance_after)->toBe('100.00')
+        ->and($wallet->fresh()->balance)->toBe('100.00')
+        ->and($wallet->fresh()->last_transaction_at)->not->toBeNull()
+        ->and($wallet->transactions()->count())->toBe(1)
+        ->and($first->fresh()->status->slug)->toBe('completed')
+        ->and($first->fresh()->balance_after)->toBe('100.00')
+        ->and($walletSnapshot->balance)->toBe('0.00');
+});
+
+it('fails promoting pending debit transaction when wallet has insufficient balance', function () {
+    $service = app(WalletTransactionService::class);
+
+    $store = Store::factory()->create();
+    $wallet = $store->wallets()->first();
+
+    $service->record($wallet, 'sale', '50.00');
+
+    $first = $service->record($wallet, 'commission', '100.00', [
+        'status' => 'pending',
+        'external_provider' => 'stripe',
+        'external_reference' => 'pi_pending_debit_123',
+    ]);
+
+    expect(fn () => $service->record($wallet, 'commission', '200.00', [
+        'status' => 'completed',
+        'external_provider' => 'stripe',
+        'external_reference' => 'pi_pending_debit_123',
+    ]))
+        ->toThrow(
+            RuntimeException::class,
+            'Insufficient wallet balance for this transaction.'
+        );
+
+    expect($wallet->fresh()->balance)
+        ->toBe('50.00')
+        ->and($first->fresh()->status->slug)
+        ->toBe('pending');
+});
+
+it('does not overwrite original data when promoting pending transaction', function () {
+    $service = app(WalletTransactionService::class);
+
+    $store = Store::factory()->create();
+    $wallet = $store->wallets()->first();
+    $admin = Admin::factory()->create();
+
+    $first = $service->record($wallet, 'sale', '100.00', [
+        'status' => 'pending',
+        'description' => 'Original event',
+        'metadata' => ['origin' => 'created'],
+        'source' => TransactionSource::Webhook,
+        'created_by' => $admin->id,
+        'external_provider' => 'stripe',
+        'external_reference' => 'pi_pending_data_123',
+    ]);
+
+    $second = $service->record($wallet, 'sale', '900.00', [
+        'status' => 'completed',
+        'description' => 'New event payload',
+        'metadata' => ['origin' => 'succeeded'],
+        'source' => TransactionSource::System,
+        'created_by' => null,
+        'external_provider' => 'stripe',
+        'external_reference' => 'pi_pending_data_123',
+    ]);
+
+    expect($second->id)->toBe($first->id)
+        ->and($second->status->slug)->toBe('completed')
+        ->and($second->amount)->toBe('100.00')
+        ->and($second->description)->toBe('Original event')
+        ->and($second->metadata)->toBe(['origin' => 'created'])
+        ->and($second->source)->toBe(TransactionSource::Webhook)
+        ->and($second->created_by)->toBe($admin->id)
+        ->and($wallet->fresh()->balance)->toBe('100.00');
+});
+
 it('links the creator relationship', function () {
     $service = app(WalletTransactionService::class);
 
@@ -249,7 +379,40 @@ it('links the creator relationship', function () {
         'created_by' => $admin->id,
     ]);
 
-    expect($transaction->fresh())->created_by->toBe($admin->id);
+    $freshTransaction = $transaction->fresh();
 
-    expect($transaction->fresh()->createdBy)->is($admin)->toBeTrue();
+    expect($freshTransaction->createdBy)
+        ->toBeInstanceOf(Admin::class)
+        ->and($freshTransaction->createdBy->is($admin))
+        ->toBeTrue();
+});
+
+it('does not apply promotion twice for duplicated external reference', function () {
+    $service = app(WalletTransactionService::class);
+
+    $store = Store::factory()->create();
+    $wallet = $store->wallets()->first();
+
+    $service->record($wallet, 'sale', '100.00', [
+        'status' => 'pending',
+        'external_provider' => 'stripe',
+        'external_reference' => 'pi_duplicate_confirm',
+    ]);
+
+    $service->record($wallet, 'sale', '100.00', [
+        'status' => 'completed',
+        'external_provider' => 'stripe',
+        'external_reference' => 'pi_duplicate_confirm',
+    ]);
+
+    $service->record($wallet, 'sale', '100.00', [
+        'status' => 'completed',
+        'external_provider' => 'stripe',
+        'external_reference' => 'pi_duplicate_confirm',
+    ]);
+
+    expect($wallet->fresh()->balance)
+        ->toBe('100.00')
+        ->and($wallet->transactions()->count())
+        ->toBe(1);
 });

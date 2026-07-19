@@ -33,10 +33,9 @@ class WalletTransactionService
         }
 
         $category = TransactionCategory::bySlugOrFail($categorySlug);
-        $statusSlug = $options['status'] ?? 'completed';
-        $status = TransactionStatus::bySlugOrFail($statusSlug);
+        $status = TransactionStatus::bySlugOrFail($options['status'] ?? 'completed');
 
-        return DB::transaction(function () use ($wallet, $category, $status, $statusSlug, $amount, $options) {
+        return DB::transaction(function () use ($wallet, $category, $status, $amount, $options) {
             $externalProvider = $options['external_provider'] ?? null;
             $externalReference = $options['external_reference'] ?? null;
 
@@ -48,6 +47,12 @@ class WalletTransactionService
                     ->first();
 
                 if ($existing) {
+                    $existing->loadMissing('status', 'category');
+
+                    if ($status->isCompleted() && $existing->isPending()) {
+                        return $this->promotePendingTransactionToCompleted($existing);
+                    }
+
                     return $existing;
                 }
             }
@@ -59,13 +64,12 @@ class WalletTransactionService
             $isCompleted = $status->isCompleted();
 
             if ($isCompleted) {
-                $newBalance = $category->isCredit()
-                    ? bcadd($lockedWallet->balance, $amount, 2)
-                    : bcsub($lockedWallet->balance, $amount, 2);
-
-                if (bccomp($newBalance, '0', 2) < 0) {
-                    throw new RuntimeException('Insufficient wallet balance for this transaction.');
-                }
+                $newBalance = $this->calculateNewBalance(
+                    currentBalance: $lockedWallet->balance,
+                    amount: $amount,
+                    isCredit: $category->isCredit(),
+                    insufficientFundsMessage: 'Insufficient wallet balance for this transaction.'
+                );
             } else {
                 // Pending (or any non-completed) transactions do not affect the balance yet
                 $newBalance = $lockedWallet->balance;
@@ -92,10 +96,19 @@ class WalletTransactionService
                 ]);
             } catch (QueryException $e) {
                 if ($externalProvider && $externalReference && $e->getCode() === '23000') {
-                    return StoreWalletTransaction::query()
+                    $existing = StoreWalletTransaction::query()
                         ->where('external_provider', $externalProvider)
                         ->where('external_reference', $externalReference)
+                        ->lockForUpdate()
                         ->firstOrFail();
+
+                    $existing->loadMissing('status', 'category');
+
+                    if ($status->isCompleted() && $existing->isPending()) {
+                        return $this->promotePendingTransactionToCompleted($existing);
+                    }
+
+                    return $existing;
                 }
 
                 throw $e;
@@ -226,27 +239,68 @@ class WalletTransactionService
                 ->lockForUpdate()
                 ->findOrFail($transaction->store_wallet_id);
 
-            $newBalance = $transaction->category->isCredit()
-                ? bcadd($lockedWallet->balance, $transaction->amount, 2)
-                : bcsub($lockedWallet->balance, $transaction->amount, 2);
+            $newBalance = $this->calculateNewBalance(
+                currentBalance: $lockedWallet->balance,
+                amount: $transaction->amount,
+                isCredit: $transaction->category->isCredit(),
+                insufficientFundsMessage: 'Insufficient wallet balance to confirm this transaction.'
+            );
 
-            if (bccomp($newBalance, '0', 2) < 0) {
-                throw new RuntimeException('Insufficient wallet balance to confirm this transaction.');
-            }
-
-            $completedStatus = TransactionStatus::bySlugOrFail('completed');
-
-            $transaction->update([
-                'transaction_status_id' => $completedStatus->id,
-                'balance_after'         => $newBalance,
-            ]);
-
-            $lockedWallet->update([
-                'balance'             => $newBalance,
-                'last_transaction_at' => now(),
-            ]);
-
-            return $transaction->fresh();
+            return $this->markTransactionCompleted($transaction, $lockedWallet, $newBalance);
         });
+    }
+
+    private function promotePendingTransactionToCompleted(
+        StoreWalletTransaction $transaction
+    ): StoreWalletTransaction {
+        $lockedWallet = StoreWallet::query()
+            ->lockForUpdate()
+            ->findOrFail($transaction->store_wallet_id);
+
+        $newBalance = $this->calculateNewBalance(
+            currentBalance: $lockedWallet->balance,
+            amount: $transaction->amount,
+            isCredit: $transaction->category->isCredit(),
+            insufficientFundsMessage: 'Insufficient wallet balance for this transaction.'
+        );
+
+        return $this->markTransactionCompleted($transaction, $lockedWallet, $newBalance);
+    }
+
+    private function calculateNewBalance(
+        string $currentBalance,
+        string $amount,
+        bool $isCredit,
+        string $insufficientFundsMessage
+    ): string {
+        $newBalance = $isCredit
+            ? bcadd($currentBalance, $amount, 2)
+            : bcsub($currentBalance, $amount, 2);
+
+        if (bccomp($newBalance, '0', 2) < 0) {
+            throw new RuntimeException($insufficientFundsMessage);
+        }
+
+        return $newBalance;
+    }
+
+    private function markTransactionCompleted(
+        StoreWalletTransaction $transaction,
+        StoreWallet $lockedWallet,
+        string $newBalance
+    ): StoreWalletTransaction {
+        $completedStatus = TransactionStatus::bySlugOrFail('completed');
+
+        $transaction->update([
+            'transaction_status_id' => $completedStatus->id,
+            'balance_after' => $newBalance,
+        ]);
+
+        $lockedWallet->update([
+            'balance' => $newBalance,
+            'last_transaction_at' => now(),
+        ]);
+
+        return $transaction->fresh();
     }
 }
