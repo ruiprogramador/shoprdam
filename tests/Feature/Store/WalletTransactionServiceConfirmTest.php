@@ -3,8 +3,8 @@
 use App\Enums\TransactionSource;
 use App\Models\Admin;
 use App\Models\Store;
-use App\Services\Wallet\WalletTransactionService;
 use App\Models\TransactionStatus;
+use App\Services\Wallet\WalletTransactionService;
 
 it('confirms a pending credit transaction and increases the wallet balance', function () {
     $service = app(WalletTransactionService::class);
@@ -12,7 +12,7 @@ it('confirms a pending credit transaction and increases the wallet balance', fun
     $store = Store::factory()->create();
     $wallet = $store->wallets()->first();
 
-    $transaction = $service->record($wallet, 'sale', '100.00', [
+    $transaction = $service->record($wallet, 'sale', '100.00', options: [
         'status' => 'pending',
     ]);
 
@@ -38,7 +38,7 @@ it('confirms a pending debit transaction and decreases the wallet balance', func
 
     $service->record($wallet, 'sale', '100.00');
 
-    $transaction = $service->record($wallet, 'commission', '30.00', [
+    $transaction = $service->record($wallet, 'commission', '30.00', options: [
         'status' => 'pending',
     ]);
 
@@ -47,13 +47,13 @@ it('confirms a pending debit transaction and decreases the wallet balance', func
     $confirmed = $service->confirm($transaction);
 
     expect($confirmed->id)->toBe($transaction->id)
-    ->and($confirmed->amount)->toBe('30.00')
-    ->and($confirmed->status->slug)->toBe('completed')
-    ->and($confirmed->balance_after)->toBe('70.00')
-    ->and($wallet->fresh()->balance)->toBe('70.00')
-    ->and($wallet->fresh()->last_transaction_at)->not->toBeNull()
-    ->and($transaction->fresh()->status->slug)->toBe('completed')
-    ->and($transaction->fresh()->balance_after)->toBe('70.00');
+        ->and($confirmed->amount)->toBe('30.00')
+        ->and($confirmed->status->slug)->toBe('completed')
+        ->and($confirmed->balance_after)->toBe('70.00')
+        ->and($wallet->fresh()->balance)->toBe('70.00')
+        ->and($wallet->fresh()->last_transaction_at)->not->toBeNull()
+        ->and($transaction->fresh()->status->slug)->toBe('completed')
+        ->and($transaction->fresh()->balance_after)->toBe('70.00');
 });
 
 it('confirms a pending debit transaction that reduces the balance to zero', function () {
@@ -64,7 +64,7 @@ it('confirms a pending debit transaction that reduces the balance to zero', func
 
     $service->record($wallet, 'sale', '40.00');
 
-    $transaction = $service->record($wallet, 'commission', '40.00', [
+    $transaction = $service->record($wallet, 'commission', '40.00', options: [
         'status' => 'pending',
     ]);
 
@@ -77,13 +77,14 @@ it('confirms a pending debit transaction that reduces the balance to zero', func
         ->and($transaction->fresh()->status->slug)->toBe('completed')
         ->and($transaction->fresh()->balance_after)->toBe('0.00');
 });
+
 it('throws an exception when confirming a non-pending transaction', function (string $statusSlug) {
     $service = app(WalletTransactionService::class);
 
     $store = Store::factory()->create();
     $wallet = $store->wallets()->first();
 
-    $transaction = $service->record($wallet, 'sale', '100.00', [
+    $transaction = $service->record($wallet, 'sale', '100.00', options: [
         'status' => $statusSlug,
     ]);
     $walletSnapshot = $wallet->fresh();
@@ -99,7 +100,7 @@ it('throws an exception when confirming a non-pending transaction', function (st
         ->and($wallet->fresh()->last_transaction_at?->toDateTimeString())->toBe($walletSnapshot->last_transaction_at?->toDateTimeString())
         ->and($transaction->fresh()->status->slug)->toBe($transactionSnapshot->status->slug)
         ->and($transaction->fresh()->balance_after)->toBe($transactionSnapshot->balance_after);
-    })->with(['completed', 'failed']);
+})->with(['completed', 'failed']);
 
 it('throws an exception when confirming would result in negative balance', function () {
     $service = app(WalletTransactionService::class);
@@ -107,13 +108,11 @@ it('throws an exception when confirming would result in negative balance', funct
     $store = Store::factory()->create();
     $wallet = $store->wallets()->first();
 
-    $pendingDebit = $service->record($wallet, 'commission', '50.00', [
+    $pendingDebit = $service->record($wallet, 'commission', '50.00', options: [
         'status' => 'pending',
     ]);
     $pendingSnapshot = $pendingDebit->fresh();
 
-    // Balance is still 0.00 because pending doesn't affect it,
-    // so confirming this debit should fail
     expect(fn () => $service->confirm($pendingDebit))
         ->toThrow(
             \RuntimeException::class,
@@ -132,7 +131,7 @@ it('throws an exception when confirming an already confirmed transaction', funct
     $store = Store::factory()->create();
     $wallet = $store->wallets()->first();
 
-    $transaction = $service->record($wallet, 'sale', '100.00', [
+    $transaction = $service->record($wallet, 'sale', '100.00', options: [
         'status' => 'pending',
     ]);
 
@@ -151,7 +150,7 @@ it('ignores dirty in-memory changes when confirming a pending transaction', func
     $store = Store::factory()->create();
     $wallet = $store->wallets()->first();
 
-    $transaction = $service->record($wallet, 'sale', '25.00', [
+    $transaction = $service->record($wallet, 'sale', '25.00', options: [
         'status' => 'pending',
     ]);
 
@@ -174,8 +173,8 @@ it('confirms two independent pending transactions correctly', function () {
     $store = Store::factory()->create();
     $wallet = $store->wallets()->first();
 
-    $first = $service->record($wallet, 'sale', '100.00', ['status' => 'pending']);
-    $second = $service->record($wallet, 'sale', '50.00', ['status' => 'pending']);
+    $first = $service->record($wallet, 'sale', '100.00', options: ['status' => 'pending']);
+    $second = $service->record($wallet, 'sale', '50.00', options: ['status' => 'pending']);
 
     expect($wallet->fresh()->balance)->toBe('0.00');
 
@@ -198,7 +197,7 @@ it('preserves descriptive transaction data when confirming', function () {
     $store = Store::factory()->create();
     $wallet = $store->wallets()->first();
 
-    $transaction = $service->record($wallet, 'sale', '100.00', [
+    $transaction = $service->record($wallet, 'sale', '100.00', options: [
         'status' => 'pending',
         'description' => 'Order #123',
         'metadata' => ['order_id' => 123],
@@ -225,7 +224,7 @@ it('preserves transaction ownership and source when confirming', function () {
     $wallet = $store->wallets()->first();
     $admin = Admin::factory()->create();
 
-    $transaction = $service->record($wallet, 'sale', '100.00', [
+    $transaction = $service->record($wallet, 'sale', '100.00', options: [
         'status' => 'pending',
         'source' => TransactionSource::Webhook,
         'created_by' => $admin->id,

@@ -9,7 +9,7 @@ it('marks a pending transaction as failed', function () {
     $store = Store::factory()->create();
     $wallet = $store->wallets()->first();
 
-    $transaction = $service->record($wallet, 'sale', '100.00', [
+    $transaction = $service->record($wallet, 'sale', '100.00', options: [
         'status' => 'pending',
     ]);
 
@@ -29,10 +29,9 @@ it('does not affect the wallet balance when marking a transaction as failed', fu
     $store = Store::factory()->create();
     $wallet = $store->wallets()->first();
 
-    // Establish a known balance first
     $service->record($wallet, 'sale', '50.00');
 
-    $transaction = $service->record($wallet, 'sale', '100.00', [
+    $transaction = $service->record($wallet, 'sale', '100.00', options: [
         'status' => 'pending',
     ]);
 
@@ -49,8 +48,8 @@ it('appends the reason to an existing description', function () {
     $store = Store::factory()->create();
     $wallet = $store->wallets()->first();
 
-    $transaction = $service->record($wallet, 'sale', '100.00', [
-        'status'      => 'pending',
+    $transaction = $service->record($wallet, 'sale', '100.00', options: [
+        'status' => 'pending',
         'description' => 'Order #1023',
     ]);
 
@@ -65,8 +64,8 @@ it('marks a pending transaction as failed without a reason', function () {
     $store = Store::factory()->create();
     $wallet = $store->wallets()->first();
 
-    $transaction = $service->record($wallet, 'sale', '100.00', [
-        'status'      => 'pending',
+    $transaction = $service->record($wallet, 'sale', '100.00', options: [
+        'status' => 'pending',
         'description' => 'Order #1023',
     ]);
 
@@ -97,7 +96,7 @@ it('throws an exception when marking a failed transaction as failed again', func
     $store = Store::factory()->create();
     $wallet = $store->wallets()->first();
 
-    $transaction = $service->record($wallet, 'sale', '100.00', [
+    $transaction = $service->record($wallet, 'sale', '100.00', options: [
         'status' => 'pending',
     ]);
 
