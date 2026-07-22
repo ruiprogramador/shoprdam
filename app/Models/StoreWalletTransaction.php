@@ -106,4 +106,9 @@ class StoreWalletTransaction extends Model
     {
         return $this->status?->slug === 'cancelled';
     }
+
+    public function isCustomerRefund(): bool
+    {
+        return $this->category?->slug === 'customer_refund';
+    }
 }

@@ -25,8 +25,8 @@ class WalletTransactionService
      * @param string $categorySlug e.g. 'sale', 'withdrawal', 'commission'
      * @param string $amount always positive; direction comes from the category. Positive decimal amount (e.g. "100.00")
      * @param WalletTransactionReference|null $reference optional external reference for idempotency
-     * @param array $options optional keys: description, external_provider, external_reference,
-     *                        referenceable, related_transaction_id, metadata, source, created_by, status
+     * @param array $options optional keys: description,referenceable, related_transaction_id
+     * , metadata, source, created_by, status
      */
     public function record(
         StoreWallet $wallet,
@@ -54,7 +54,7 @@ class WalletTransactionService
             $reference,
             $options
         ) {
-            if ($reference) {
+            if ($reference !== null) {
                 $existing = StoreWalletTransaction::query()
                     ->where('external_provider', $reference->provider)
                     ->where('external_reference', $reference->reference)
@@ -145,7 +145,7 @@ class WalletTransactionService
                 ]);
             }
 
-            return $transaction;
+            return $transaction->fresh();
         });
     }
 
@@ -198,7 +198,7 @@ class WalletTransactionService
             }
 
             if ($original->childTransactions()->exists()) {
-                if ($reference) {
+                if ($reference !== null) {
                     $existing = StoreWalletTransaction::query()
                         ->where('related_transaction_id', $original->id)
                         ->where('external_provider', $reference->provider)
