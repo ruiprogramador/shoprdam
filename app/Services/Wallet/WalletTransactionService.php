@@ -2,6 +2,13 @@
 
 namespace App\Services\Wallet;
 
+use App\Domain\Wallet\Exceptions\CannotReverseReversalException;
+use App\Domain\Wallet\Exceptions\InsufficientWalletBalanceException;
+use App\Domain\Wallet\Exceptions\InvalidTransactionAmountException;
+use App\Domain\Wallet\Exceptions\TransactionAlreadyReversedException;
+use App\Domain\Wallet\Exceptions\TransactionNotCompletedException;
+use App\Domain\Wallet\Exceptions\TransactionNotPendingException;
+use App\Domain\Wallet\Exceptions\WalletMismatchException;
 use App\Domain\Wallet\WalletTransactionReference;
 use App\Models\StoreWallet;
 use App\Models\StoreWalletTransaction;
@@ -10,7 +17,6 @@ use App\Models\TransactionStatus;
 use App\Enums\TransactionSource;
 use Illuminate\Database\QueryException;
 use Illuminate\Support\Facades\DB;
-use RuntimeException;
 
 class WalletTransactionService
 {
@@ -36,9 +42,7 @@ class WalletTransactionService
         array $options = []
     ): StoreWalletTransaction {
         if (bccomp($amount, '0', 2) <= 0) {
-            throw new RuntimeException(
-                'Transaction amount must be greater than zero.'
-            );
+            throw InvalidTransactionAmountException::nonPositive();
         }
 
         $category = TransactionCategory::bySlugOrFail($categorySlug);
@@ -85,8 +89,8 @@ class WalletTransactionService
                     currentBalance: $lockedWallet->balance,
                     amount: $amount,
                     isCredit: $category->isCredit(),
-                    insufficientFundsMessage:
-                        'Insufficient wallet balance for this transaction.'
+                    insufficientFundsException:
+                        InsufficientWalletBalanceException::forNewTransaction()
                 );
             } else {
                 $newBalance = $lockedWallet->balance;
@@ -161,22 +165,28 @@ class WalletTransactionService
      * @param string|null $description optional description for the reversal transaction
      * @param WalletTransactionReference|null $reference optional external reference for idempotency
      * @param array $options optional keys: metadata, source, created_by, status
+     * @param StoreWallet|null $wallet if provided, the original transaction must belong to this wallet
      * @return StoreWalletTransaction the reversal transaction
-     * @throws RuntimeException if the original transaction is not completed or is already a reversal
+     * @throws TransactionNotCompletedException if the original transaction is not completed
+     * @throws CannotReverseReversalException if the original transaction is itself a reversal
+     * @throws TransactionAlreadyReversedException if the original transaction was already reversed
+     * @throws WalletMismatchException if the original transaction does not belong to the given wallet
      */
     public function reverse(
         StoreWalletTransaction $original,
         string $reversalCategorySlug,
         ?string $description = null,
         ?WalletTransactionReference $reference = null,
-        array $options = []
+        array $options = [],
+        ?StoreWallet $wallet = null
     ): StoreWalletTransaction {
         return DB::transaction(function () use (
             $original,
             $reversalCategorySlug,
             $description,
             $reference,
-            $options
+            $options,
+            $wallet
         ) {
             $statusSlug = $options['status'] ?? 'completed';
 
@@ -185,16 +195,16 @@ class WalletTransactionService
                 ->lockForUpdate()
                 ->findOrFail($original->id);
 
+            if ($wallet !== null && $wallet->id !== $original->store_wallet_id) {
+                throw WalletMismatchException::forReversal();
+            }
+
             if ($original->isReversal()) {
-                throw new RuntimeException(
-                    'Cannot reverse a transaction that is itself a reversal.'
-                );
+                throw CannotReverseReversalException::create();
             }
 
             if (! $original->isCompleted()) {
-                throw new RuntimeException(
-                    'Only completed transactions can be reversed.'
-                );
+                throw TransactionNotCompletedException::cannotReverse();
             }
 
             if ($original->childTransactions()->exists()) {
@@ -217,9 +227,7 @@ class WalletTransactionService
                     }
                 }
 
-                throw new RuntimeException(
-                    'This transaction has already been reversed.'
-                );
+                throw TransactionAlreadyReversedException::create();
             }
 
             return $this->record(
@@ -229,6 +237,7 @@ class WalletTransactionService
                 reference: $reference,
                 options: array_merge($options, [
                     'description' => $description
+                        ?? $options['description']
                         ?? "Reversal of transaction #{$original->id}",
                     'related_transaction_id' => $original->id,
                 ])
@@ -258,9 +267,7 @@ class WalletTransactionService
                 ->findOrFail($transaction->id);
 
             if (! $transaction->isPending()) {
-                throw new RuntimeException(
-                    'Only pending transactions can be marked as failed.'
-                );
+                throw TransactionNotPendingException::cannotMarkFailed();
             }
 
             $transaction->update([
@@ -291,7 +298,7 @@ class WalletTransactionService
                 ->findOrFail($transaction->id);
 
             if (!$transaction->isPending()) {
-                throw new RuntimeException('Only pending transactions can be confirmed.');
+                throw TransactionNotPendingException::cannotConfirm();
             }
 
             $lockedWallet = StoreWallet::query()
@@ -302,7 +309,7 @@ class WalletTransactionService
                 currentBalance: $lockedWallet->balance,
                 amount: $transaction->amount,
                 isCredit: $transaction->category->isCredit(),
-                insufficientFundsMessage: 'Insufficient wallet balance to confirm this transaction.'
+                insufficientFundsException: InsufficientWalletBalanceException::forConfirmation()
             );
 
             return $this->markTransactionCompleted($transaction, $lockedWallet, $newBalance);
@@ -320,7 +327,7 @@ class WalletTransactionService
             currentBalance: $lockedWallet->balance,
             amount: $transaction->amount,
             isCredit: $transaction->category->isCredit(),
-            insufficientFundsMessage: 'Insufficient wallet balance for this transaction.'
+            insufficientFundsException: InsufficientWalletBalanceException::forNewTransaction()
         );
 
         return $this->markTransactionCompleted($transaction, $lockedWallet, $newBalance);
@@ -330,14 +337,14 @@ class WalletTransactionService
         string $currentBalance,
         string $amount,
         bool $isCredit,
-        string $insufficientFundsMessage
+        InsufficientWalletBalanceException $insufficientFundsException
     ): string {
         $newBalance = $isCredit
             ? bcadd($currentBalance, $amount, 2)
             : bcsub($currentBalance, $amount, 2);
 
         if (bccomp($newBalance, '0', 2) < 0) {
-            throw new RuntimeException($insufficientFundsMessage);
+            throw $insufficientFundsException;
         }
 
         return $newBalance;

@@ -1,5 +1,10 @@
 <?php
 
+use App\Domain\Wallet\Exceptions\CannotReverseReversalException;
+use App\Domain\Wallet\Exceptions\InsufficientWalletBalanceException;
+use App\Domain\Wallet\Exceptions\TransactionAlreadyReversedException;
+use App\Domain\Wallet\Exceptions\TransactionNotCompletedException;
+use App\Domain\Wallet\Exceptions\WalletMismatchException;
 use App\Domain\Wallet\WalletTransactionReference;
 use App\Enums\TransactionSource;
 use App\Models\Admin;
@@ -7,20 +12,21 @@ use App\Models\Store;
 use App\Models\StoreWalletTransaction;
 use App\Services\Wallet\WalletTransactionService;
 
+beforeEach(function () {
+    $this->service = app(WalletTransactionService::class);
+    $this->store = Store::factory()->create();
+    $this->wallet = $this->store->wallets()->first();
+});
+
 
 it('creates a reversal transaction and restores the wallet balance', function () {
-    $service = app(WalletTransactionService::class);
-
-    $store = Store::factory()->create();
-    $wallet = $store->wallets()->first();
-
-    $sale = $service->record(
-        $wallet,
+    $sale = $this->service->record(
+        $this->wallet,
         'sale',
         '100.00'
     );
 
-    $reversal = $service->reverse(
+    $reversal = $this->service->reverse(
         $sale,
         'customer_refund'
     );
@@ -34,7 +40,7 @@ it('creates a reversal transaction and restores the wallet balance', function ()
     expect($reversal->id)
         ->not->toBe($sale->id)
         ->and($reversal->store_wallet_id)
-        ->toBe($wallet->id)
+        ->toBe($this->wallet->id)
         ->and($reversal->amount)
         ->toBe('100.00')
         ->and($reversal->balance_after)
@@ -47,32 +53,26 @@ it('creates a reversal transaction and restores the wallet balance', function ()
         ->toBe('completed')
         ->and($reversal->isReversal())
         ->toBeTrue()
-        ->and($wallet->fresh()->balance)
+        ->and($this->wallet->fresh()->balance)
         ->toBe('0.00');
 });
 
 
 it('creates a reversal for debit transactions correctly', function () {
-    $service = app(WalletTransactionService::class);
-
-    $store = Store::factory()->create();
-    $wallet = $store->wallets()->first();
-
-
-    $service->record(
-        $wallet,
+    $this->service->record(
+        $this->wallet,
         'sale',
         '100.00'
     );
 
-    $commission = $service->record(
-        $wallet,
+    $commission = $this->service->record(
+        $this->wallet,
         'commission',
         '30.00'
     );
 
 
-    $reversal = $service->reverse(
+    $reversal = $this->service->reverse(
         $commission,
         'commission_refund'
     );
@@ -82,67 +82,114 @@ it('creates a reversal for debit transactions correctly', function () {
         ->toBe('30.00')
         ->and($reversal->balance_after)
         ->toBe('100.00')
-        ->and($wallet->fresh()->balance)
+        ->and($this->wallet->fresh()->balance)
         ->toBe('100.00');
 });
 
 
-it('preserves original transaction data when creating reversal', function () {
-    $service = app(WalletTransactionService::class);
-
-    $store = Store::factory()->create();
-    $wallet = $store->wallets()->first();
-
-
-    $sale = $service->record(
-        $wallet,
+it('preserves all original transaction fields when creating a reversal', function () {
+    $sale = $this->service->record(
+        $this->wallet,
         'sale',
         '100.00',
         null,
         [
-            'description' => 'Original sale',
+            'description' => 'Original order',
             'metadata' => [
                 'order_id' => 123,
             ],
         ]
     );
 
+    $originalId = $sale->id;
+    $originalAmount = $sale->amount;
+    $originalCategorySlug = $sale->category->slug;
+    $originalBalanceAfter = $sale->balance_after;
 
-    $service->reverse(
+    $this->service->reverse(
         $sale,
         'customer_refund'
     );
 
+    $sale = $sale->fresh(['category', 'status']);
 
-    $sale = $sale->fresh();
-
-
-    expect($sale->description)
-        ->toBe('Original sale')
+    expect($sale->id)
+        ->toBe($originalId)
+        ->and($sale->description)
+        ->toBe('Original order')
         ->and($sale->metadata)
         ->toBe([
             'order_id' => 123,
         ])
+        ->and($sale->amount)
+        ->toBe($originalAmount)
+        ->and($sale->category->slug)
+        ->toBe($originalCategorySlug)
+        ->and($sale->balance_after)
+        ->toBe($originalBalanceAfter)
         ->and($sale->status->slug)
         ->toBe('completed');
 });
 
 
+it('keeps its own external reference on the original transaction after it is reversed', function () {
+    $sale = $this->service->record(
+        $this->wallet,
+        'sale',
+        '100.00',
+        new WalletTransactionReference('stripe', 'original_charge_123')
+    );
+
+    $this->service->reverse(
+        $sale,
+        'customer_refund',
+        null,
+        new WalletTransactionReference('stripe', 'refund_of_charge_123')
+    );
+
+    $original = $sale->fresh();
+
+    expect($original->external_provider)
+        ->toBe('stripe')
+        ->and($original->external_reference)
+        ->toBe('original_charge_123');
+});
+
+
+it('updates wallet last_transaction_at when reversing a completed transaction', function () {
+    $sale = $this->service->record(
+        $this->wallet,
+        'sale',
+        '100.00'
+    );
+
+    $before = $this->wallet->fresh()->last_transaction_at;
+
+    $this->travel(1)->minutes();
+
+    $this->service->reverse(
+        $sale,
+        'customer_refund'
+    );
+
+    $after = $this->wallet->fresh()->last_transaction_at;
+
+    expect($after)
+        ->not->toBeNull()
+        ->and($after->greaterThan($before))
+        ->toBeTrue();
+});
+
+
 it('uses default reversal description when none is supplied', function () {
-    $service = app(WalletTransactionService::class);
-
-    $store = Store::factory()->create();
-    $wallet = $store->wallets()->first();
-
-
-    $sale = $service->record(
-        $wallet,
+    $sale = $this->service->record(
+        $this->wallet,
         'sale',
         '100.00'
     );
 
 
-    $reversal = $service->reverse(
+    $reversal = $this->service->reverse(
         $sale,
         'customer_refund'
     );
@@ -156,20 +203,14 @@ it('uses default reversal description when none is supplied', function () {
 
 
 it('preserves custom reversal description and metadata', function () {
-    $service = app(WalletTransactionService::class);
-
-    $store = Store::factory()->create();
-    $wallet = $store->wallets()->first();
-
-
-    $sale = $service->record(
-        $wallet,
+    $sale = $this->service->record(
+        $this->wallet,
         'sale',
         '100.00'
     );
 
 
-    $reversal = $service->reverse(
+    $reversal = $this->service->reverse(
         $sale,
         'customer_refund',
         'Manual refund',
@@ -191,13 +232,8 @@ it('preserves custom reversal description and metadata', function () {
 });
 
 it('ignores dirty in-memory transaction changes when reversing', function () {
-    $service = app(WalletTransactionService::class);
-
-    $store = Store::factory()->create();
-    $wallet = $store->wallets()->first();
-
-    $sale = $service->record(
-        $wallet,
+    $sale = $this->service->record(
+        $this->wallet,
         'sale',
         '100.00'
     );
@@ -206,7 +242,7 @@ it('ignores dirty in-memory transaction changes when reversing', function () {
     $sale->transaction_category_id = null;
     $sale->store_wallet_id = null;
 
-    $reversal = $service->reverse(
+    $reversal = $this->service->reverse(
         $sale,
         'customer_refund'
     );
@@ -218,29 +254,23 @@ it('ignores dirty in-memory transaction changes when reversing', function () {
         ->toBe($sale->id)
         ->and($reversal->balance_after)
         ->toBe('0.00')
-        ->and($wallet->fresh()->balance)
+        ->and($this->wallet->fresh()->balance)
         ->toBe('0.00');
 });
 
 
 it('ignores dirty wallet changes when reversing', function () {
-    $service = app(WalletTransactionService::class);
-
-    $store = Store::factory()->create();
-    $wallet = $store->wallets()->first();
-
-
-    $sale = $service->record(
-        $wallet,
+    $sale = $this->service->record(
+        $this->wallet,
         'sale',
         '100.00'
     );
 
 
-    $wallet->balance = '9999.00';
+    $this->wallet->balance = '9999.00';
 
 
-    $reversal = $service->reverse(
+    $reversal = $this->service->reverse(
         $sale,
         'customer_refund'
     );
@@ -248,20 +278,14 @@ it('ignores dirty wallet changes when reversing', function () {
 
     expect($reversal->balance_after)
         ->toBe('0.00')
-        ->and($wallet->fresh()->balance)
+        ->and($this->wallet->fresh()->balance)
         ->toBe('0.00');
 });
 
 
 it('throws when reversing a pending transaction', function () {
-    $service = app(WalletTransactionService::class);
-
-    $store = Store::factory()->create();
-    $wallet = $store->wallets()->first();
-
-
-    $pending = $service->record(
-        $wallet,
+    $pending = $this->service->record(
+        $this->wallet,
         'sale',
         '100.00',
         null,
@@ -272,96 +296,82 @@ it('throws when reversing a pending transaction', function () {
 
 
     expect(fn () =>
-        $service->reverse(
+        $this->service->reverse(
             $pending,
             'customer_refund'
         )
     )->toThrow(
-        RuntimeException::class,
+        TransactionNotCompletedException::class,
         'Only completed transactions can be reversed.'
     );
 
 
-    expect($wallet->fresh()->balance)
+    expect($this->wallet->fresh()->balance)
         ->toBe('0.00')
-        ->and($wallet->transactions()->count())
+        ->and($this->wallet->transactions()->count())
         ->toBe(1);
 });
 
 
 it('cannot reverse a reversal transaction', function () {
-    $service = app(WalletTransactionService::class);
-
-    $store = Store::factory()->create();
-    $wallet = $store->wallets()->first();
-
-
-    $sale = $service->record(
-        $wallet,
+    $sale = $this->service->record(
+        $this->wallet,
         'sale',
         '100.00'
     );
 
 
-    $reversal = $service->reverse(
+    $reversal = $this->service->reverse(
         $sale,
         'customer_refund'
     );
 
 
     expect(fn () =>
-        $service->reverse(
+        $this->service->reverse(
             $reversal,
             'commission_refund'
         )
     )->toThrow(
-        RuntimeException::class,
+        CannotReverseReversalException::class,
         'Cannot reverse a transaction that is itself a reversal.'
     );
 });
 
 
 it('does not allow the same transaction to be reversed twice', function () {
-    $service = app(WalletTransactionService::class);
-
-    $store = Store::factory()->create();
-    $wallet = $store->wallets()->first();
-
-
-    $sale = $service->record(
-        $wallet,
+    $sale = $this->service->record(
+        $this->wallet,
         'sale',
         '100.00'
     );
 
 
-    $service->reverse(
+    $this->service->reverse(
         $sale,
         'customer_refund'
     );
 
 
     expect(fn () =>
-        $service->reverse(
+        $this->service->reverse(
             $sale,
             'customer_refund'
         )
     )->toThrow(
-        RuntimeException::class,
+        TransactionAlreadyReversedException::class,
         'This transaction has already been reversed.'
     );
 
 
-    expect($wallet->fresh()->balance)
+    expect($this->wallet->fresh()->balance)
         ->toBe('0.00')
-        ->and($wallet->transactions()->count())
+        ->and($this->wallet->transactions()->count())
         ->toBe(2);
 });
 
 
 it('does not allow reversal from another wallet', function () {
-    $service = app(WalletTransactionService::class);
-
     $storeA = Store::factory()->create();
     $walletA = $storeA->wallets()->first();
 
@@ -370,7 +380,7 @@ it('does not allow reversal from another wallet', function () {
     $walletB = $storeB->wallets()->first();
 
 
-    $sale = $service->record(
+    $sale = $this->service->record(
         $walletA,
         'sale',
         '100.00'
@@ -378,36 +388,69 @@ it('does not allow reversal from another wallet', function () {
 
 
     expect(fn () =>
-        $service->reverse(
+        $this->service->reverse(
             $sale,
             'customer_refund',
-            null,
-            null,
-            [
-                'wallet' => $walletB,
-            ]
+            wallet: $walletB
         )
-    )->toThrow(RuntimeException::class);
+    )->toThrow(
+        WalletMismatchException::class,
+        'Cannot reverse a transaction using a different wallet.'
+    );
 
 
     expect($walletA->fresh()->balance)
         ->toBe('100.00')
         ->and($walletB->fresh()->balance)
-        ->toBe('0.00');
+        ->toBe('0.00')
+        ->and($walletA->transactions()->count())
+        ->toBe(1);
+});
+
+
+it('throws when reversing would result in negative wallet balance', function () {
+    $sale = $this->service->record(
+        $this->wallet,
+        'sale',
+        '100.00'
+    );
+
+    $this->service->record(
+        $this->wallet,
+        'commission',
+        '80.00'
+    );
+
+    expect($this->wallet->fresh()->balance)
+        ->toBe('20.00');
+
+    $snapshot = $sale->fresh();
+
+    expect(fn () =>
+        $this->service->reverse(
+            $sale,
+            'customer_refund'
+        )
+    )->toThrow(
+        InsufficientWalletBalanceException::class,
+        'Insufficient wallet balance for this transaction.'
+    );
+
+    expect($this->wallet->fresh()->balance)
+        ->toBe('20.00')
+        ->and($sale->fresh()->status->slug)
+        ->toBe($snapshot->status->slug)
+        ->and($this->wallet->transactions()->count())
+        ->toBe(2);
 });
 
 
 it('keeps original reversal payload when duplicate external reference completes later', function () {
-    $service = app(WalletTransactionService::class);
-
-    $store = Store::factory()->create();
-    $wallet = $store->wallets()->first();
-
     $admin = Admin::factory()->create();
 
 
-    $sale = $service->record(
-        $wallet,
+    $sale = $this->service->record(
+        $this->wallet,
         'sale',
         '100.00'
     );
@@ -419,7 +462,7 @@ it('keeps original reversal payload when duplicate external reference completes 
     );
 
 
-    $first = $service->reverse(
+    $first = $this->service->reverse(
         $sale,
         'customer_refund',
         null,
@@ -436,7 +479,7 @@ it('keeps original reversal payload when duplicate external reference completes 
     );
 
 
-    $second = $service->reverse(
+    $second = $this->service->reverse(
         $sale,
         'customer_refund',
         null,
@@ -472,14 +515,8 @@ it('keeps original reversal payload when duplicate external reference completes 
 });
 
 it('returns existing reversal when duplicated external reference is provided', function () {
-    $service = app(WalletTransactionService::class);
-
-    $store = Store::factory()->create();
-    $wallet = $store->wallets()->first();
-
-
-    $sale = $service->record(
-        $wallet,
+    $sale = $this->service->record(
+        $this->wallet,
         'sale',
         '100.00'
     );
@@ -491,7 +528,7 @@ it('returns existing reversal when duplicated external reference is provided', f
     );
 
 
-    $first = $service->reverse(
+    $first = $this->service->reverse(
         $sale,
         'customer_refund',
         null,
@@ -499,7 +536,7 @@ it('returns existing reversal when duplicated external reference is provided', f
     );
 
 
-    $second = $service->reverse(
+    $second = $this->service->reverse(
         $sale,
         'customer_refund',
         null,
@@ -511,22 +548,16 @@ it('returns existing reversal when duplicated external reference is provided', f
         ->toBe($first->id)
         ->and($second->related_transaction_id)
         ->toBe($sale->id)
-        ->and($wallet->fresh()->balance)
+        ->and($this->wallet->fresh()->balance)
         ->toBe('0.00')
-        ->and($wallet->transactions()->count())
+        ->and($this->wallet->transactions()->count())
         ->toBe(2);
 });
 
 
 it('promotes a pending reversal to completed without creating another transaction', function () {
-    $service = app(WalletTransactionService::class);
-
-    $store = Store::factory()->create();
-    $wallet = $store->wallets()->first();
-
-
-    $sale = $service->record(
-        $wallet,
+    $sale = $this->service->record(
+        $this->wallet,
         'sale',
         '100.00'
     );
@@ -538,7 +569,7 @@ it('promotes a pending reversal to completed without creating another transactio
     );
 
 
-    $pending = $service->reverse(
+    $pending = $this->service->reverse(
         $sale,
         'customer_refund',
         null,
@@ -549,11 +580,11 @@ it('promotes a pending reversal to completed without creating another transactio
     );
 
 
-    expect($wallet->fresh()->balance)
+    expect($this->wallet->fresh()->balance)
         ->toBe('100.00');
 
 
-    $completed = $service->reverse(
+    $completed = $this->service->reverse(
         $sale,
         'customer_refund',
         null,
@@ -570,22 +601,16 @@ it('promotes a pending reversal to completed without creating another transactio
         ->toBe('completed')
         ->and($completed->balance_after)
         ->toBe('0.00')
-        ->and($wallet->fresh()->balance)
+        ->and($this->wallet->fresh()->balance)
         ->toBe('0.00')
-        ->and($wallet->transactions()->count())
+        ->and($this->wallet->transactions()->count())
         ->toBe(2);
 });
 
 
 it('preserves external reference information on reversal', function () {
-    $service = app(WalletTransactionService::class);
-
-    $store = Store::factory()->create();
-    $wallet = $store->wallets()->first();
-
-
-    $sale = $service->record(
-        $wallet,
+    $sale = $this->service->record(
+        $this->wallet,
         'sale',
         '100.00'
     );
@@ -597,7 +622,7 @@ it('preserves external reference information on reversal', function () {
     );
 
 
-    $reversal = $service->reverse(
+    $reversal = $this->service->reverse(
         $sale,
         'customer_refund',
         null,
@@ -613,22 +638,17 @@ it('preserves external reference information on reversal', function () {
 
 
 it('stores reversal creator and source correctly', function () {
-    $service = app(WalletTransactionService::class);
-
-    $store = Store::factory()->create();
-    $wallet = $store->wallets()->first();
-
     $admin = Admin::factory()->create();
 
 
-    $sale = $service->record(
-        $wallet,
+    $sale = $this->service->record(
+        $this->wallet,
         'sale',
         '100.00'
     );
 
 
-    $reversal = $service->reverse(
+    $reversal = $this->service->reverse(
         $sale,
         'customer_refund',
         null,
@@ -653,20 +673,14 @@ it('stores reversal creator and source correctly', function () {
 
 
 it('uses system source by default for reversal', function () {
-    $service = app(WalletTransactionService::class);
-
-    $store = Store::factory()->create();
-    $wallet = $store->wallets()->first();
-
-
-    $sale = $service->record(
-        $wallet,
+    $sale = $this->service->record(
+        $this->wallet,
         'sale',
         '100.00'
     );
 
 
-    $reversal = $service->reverse(
+    $reversal = $this->service->reverse(
         $sale,
         'customer_refund'
     );
@@ -677,64 +691,15 @@ it('uses system source by default for reversal', function () {
 });
 
 
-it('does not mutate original transaction fields when reversing', function () {
-    $service = app(WalletTransactionService::class);
-
-    $store = Store::factory()->create();
-    $wallet = $store->wallets()->first();
-
-
-    $sale = $service->record(
-        $wallet,
-        'sale',
-        '100.00',
-        null,
-        [
-            'description' => 'Original order',
-            'metadata' => [
-                'order_id' => 123,
-            ],
-        ]
-    );
-
-
-    $originalId = $sale->id;
-    $originalDescription = $sale->description;
-
-
-    $service->reverse(
-        $sale,
-        'customer_refund'
-    );
-
-
-    $sale = $sale->fresh();
-
-
-    expect($sale->id)
-        ->toBe($originalId)
-        ->and($sale->description)
-        ->toBe($originalDescription)
-        ->and($sale->status->slug)
-        ->toBe('completed');
-});
-
-
 it('handles decimal amounts correctly when reversing', function () {
-    $service = app(WalletTransactionService::class);
-
-    $store = Store::factory()->create();
-    $wallet = $store->wallets()->first();
-
-
-    $sale = $service->record(
-        $wallet,
+    $sale = $this->service->record(
+        $this->wallet,
         'sale',
         '99.99'
     );
 
 
-    $reversal = $service->reverse(
+    $reversal = $this->service->reverse(
         $sale,
         'customer_refund'
     );
@@ -744,20 +709,14 @@ it('handles decimal amounts correctly when reversing', function () {
         ->toBe('99.99')
         ->and($reversal->balance_after)
         ->toBe('0.00')
-        ->and($wallet->fresh()->balance)
+        ->and($this->wallet->fresh()->balance)
         ->toBe('0.00');
 });
 
 
 it('does not create duplicate reversal rows during race condition lookup', function () {
-    $service = app(WalletTransactionService::class);
-
-    $store = Store::factory()->create();
-    $wallet = $store->wallets()->first();
-
-
-    $sale = $service->record(
-        $wallet,
+    $sale = $this->service->record(
+        $this->wallet,
         'sale',
         '100.00'
     );
@@ -770,7 +729,7 @@ it('does not create duplicate reversal rows during race condition lookup', funct
 
 
     $existing = StoreWalletTransaction::factory()
-        ->forWallet($wallet)
+        ->forWallet($this->wallet)
         ->customerRefund()
         ->amount('100.00')
         ->create([
@@ -780,7 +739,7 @@ it('does not create duplicate reversal rows during race condition lookup', funct
         ]);
 
 
-    $result = $service->reverse(
+    $result = $this->service->reverse(
         $sale,
         'customer_refund',
         null,
@@ -794,20 +753,14 @@ it('does not create duplicate reversal rows during race condition lookup', funct
 
 
 it('does not allow two different reversal references for the same transaction', function () {
-    $service = app(WalletTransactionService::class);
-
-    $store = Store::factory()->create();
-    $wallet = $store->wallets()->first();
-
-
-    $sale = $service->record(
-        $wallet,
+    $sale = $this->service->record(
+        $this->wallet,
         'sale',
         '100.00'
     );
 
 
-    $service->reverse(
+    $this->service->reverse(
         $sale,
         'customer_refund',
         null,
@@ -819,7 +772,7 @@ it('does not allow two different reversal references for the same transaction', 
 
 
     expect(fn () =>
-        $service->reverse(
+        $this->service->reverse(
             $sale,
             'customer_refund',
             null,
@@ -829,13 +782,46 @@ it('does not allow two different reversal references for the same transaction', 
             )
         )
     )->toThrow(
-        RuntimeException::class,
+        TransactionAlreadyReversedException::class,
         'This transaction has already been reversed.'
     );
 
 
-    expect($wallet->fresh()->balance)
+    expect($this->wallet->fresh()->balance)
         ->toBe('0.00')
-        ->and($wallet->transactions()->count())
+        ->and($this->wallet->transactions()->count())
         ->toBe(2);
+});
+
+
+it('keeps the wallet balance correct when reversing one transaction and confirming another pending one', function () {
+    $sale = $this->service->record(
+        $this->wallet,
+        'sale',
+        '100.00'
+    );
+
+    $pendingSale = $this->service->record(
+        $this->wallet,
+        'sale',
+        '40.00',
+        options: [
+            'status' => 'pending',
+        ]
+    );
+
+    expect($this->wallet->fresh()->balance)
+        ->toBe('100.00');
+
+    $this->service->reverse($sale, 'customer_refund');
+
+    expect($this->wallet->fresh()->balance)
+        ->toBe('0.00');
+
+    $this->service->confirm($pendingSale);
+
+    expect($this->wallet->fresh()->balance)
+        ->toBe('40.00')
+        ->and($this->wallet->transactions()->count())
+        ->toBe(3);
 });

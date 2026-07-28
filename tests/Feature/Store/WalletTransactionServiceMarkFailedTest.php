@@ -1,22 +1,25 @@
 <?php
 
+use App\Domain\Wallet\Exceptions\TransactionNotPendingException;
+use App\Domain\Wallet\WalletTransactionReference;
 use App\Enums\TransactionSource;
 use App\Models\Admin;
 use App\Models\Store;
 use App\Services\Wallet\WalletTransactionService;
 
+beforeEach(function () {
+    $this->service = app(WalletTransactionService::class);
+    $this->store = Store::factory()->create();
+    $this->wallet = $this->store->wallets()->first();
+});
+
 
 it('marks a pending transaction as failed', function () {
-    $service = app(WalletTransactionService::class);
-
-    $store = Store::factory()->create();
-    $wallet = $store->wallets()->first();
-
-    $transaction = $service->record($wallet, 'sale', '100.00', options: [
+    $transaction = $this->service->record($this->wallet, 'sale', '100.00', options: [
         'status' => 'pending',
     ]);
 
-    $failed = $service->markFailed(
+    $failed = $this->service->markFailed(
         $transaction,
         'Card declined'
     );
@@ -26,7 +29,7 @@ it('marks a pending transaction as failed', function () {
     expect($failed->id)
         ->toBe($transaction->id)
         ->and($failed->store_wallet_id)
-        ->toBe($wallet->id)
+        ->toBe($this->wallet->id)
         ->and($failed->status->slug)
         ->toBe('failed')
         ->and($failed->isFailed())
@@ -37,15 +40,10 @@ it('marks a pending transaction as failed', function () {
 
 
 it('does not affect wallet balance when marking a transaction as failed', function () {
-    $service = app(WalletTransactionService::class);
+    $this->service->record($this->wallet, 'sale', '50.00');
 
-    $store = Store::factory()->create();
-    $wallet = $store->wallets()->first();
-
-    $service->record($wallet, 'sale', '50.00');
-
-    $transaction = $service->record(
-        $wallet,
+    $transaction = $this->service->record(
+        $this->wallet,
         'sale',
         '100.00',
         options: [
@@ -53,27 +51,22 @@ it('does not affect wallet balance when marking a transaction as failed', functi
         ]
     );
 
-    $balanceBefore = $wallet->fresh()->balance;
+    $balanceBefore = $this->wallet->fresh()->balance;
 
-    $service->markFailed($transaction);
+    $this->service->markFailed($transaction);
 
-    expect($wallet->fresh()->balance)
+    expect($this->wallet->fresh()->balance)
         ->toBe($balanceBefore);
 });
 
 
 it('appends failure reason to an existing description', function () {
-    $service = app(WalletTransactionService::class);
-
-    $store = Store::factory()->create();
-    $wallet = $store->wallets()->first();
-
-    $transaction = $service->record($wallet, 'sale', '100.00', options: [
+    $transaction = $this->service->record($this->wallet, 'sale', '100.00', options: [
         'status' => 'pending',
         'description' => 'Order #1023',
     ]);
 
-    $failed = $service->markFailed(
+    $failed = $this->service->markFailed(
         $transaction,
         'Card declined'
     );
@@ -84,17 +77,12 @@ it('appends failure reason to an existing description', function () {
 
 
 it('keeps description unchanged when failure reason is empty', function () {
-    $service = app(WalletTransactionService::class);
-
-    $store = Store::factory()->create();
-    $wallet = $store->wallets()->first();
-
-    $transaction = $service->record($wallet, 'sale', '100.00', options: [
+    $transaction = $this->service->record($this->wallet, 'sale', '100.00', options: [
         'status' => 'pending',
         'description' => 'Order #1023',
     ]);
 
-    $failed = $service->markFailed($transaction);
+    $failed = $this->service->markFailed($transaction);
 
     expect($failed->description)
         ->toBe('Order #1023')
@@ -104,33 +92,23 @@ it('keeps description unchanged when failure reason is empty', function () {
 
 
 it('throws when marking a non pending transaction as failed', function () {
-    $service = app(WalletTransactionService::class);
-
-    $store = Store::factory()->create();
-    $wallet = $store->wallets()->first();
-
-    $transaction = $service->record(
-        $wallet,
+    $transaction = $this->service->record(
+        $this->wallet,
         'sale',
         '100.00'
     );
 
-    expect(fn () => $service->markFailed($transaction))
+    expect(fn () => $this->service->markFailed($transaction))
         ->toThrow(
-            RuntimeException::class,
+            TransactionNotPendingException::class,
             'Only pending transactions can be marked as failed.'
         );
 });
 
 
 it('throws when marking an already failed transaction as failed again', function () {
-    $service = app(WalletTransactionService::class);
-
-    $store = Store::factory()->create();
-    $wallet = $store->wallets()->first();
-
-    $transaction = $service->record(
-        $wallet,
+    $transaction = $this->service->record(
+        $this->wallet,
         'sale',
         '100.00',
         options: [
@@ -138,24 +116,19 @@ it('throws when marking an already failed transaction as failed again', function
         ]
     );
 
-    $service->markFailed($transaction);
+    $this->service->markFailed($transaction);
 
-    expect(fn () => $service->markFailed($transaction))
+    expect(fn () => $this->service->markFailed($transaction))
         ->toThrow(
-            RuntimeException::class,
+            TransactionNotPendingException::class,
             'Only pending transactions can be marked as failed.'
         );
 });
 
 
 it('ignores dirty in-memory transaction changes when marking failed', function () {
-    $service = app(WalletTransactionService::class);
-
-    $store = Store::factory()->create();
-    $wallet = $store->wallets()->first();
-
-    $transaction = $service->record(
-        $wallet,
+    $transaction = $this->service->record(
+        $this->wallet,
         'sale',
         '100.00',
         options: [
@@ -167,7 +140,7 @@ it('ignores dirty in-memory transaction changes when marking failed', function (
     $transaction->amount = '9999.00';
     $transaction->description = 'Fake description';
 
-    $failed = $service->markFailed(
+    $failed = $this->service->markFailed(
         $transaction,
         'Card declined'
     );
@@ -184,14 +157,9 @@ it('ignores dirty in-memory transaction changes when marking failed', function (
 
 
 it('preserves metadata ownership and source when marking failed', function () {
-    $service = app(WalletTransactionService::class);
-
-    $store = Store::factory()->create();
-    $wallet = $store->wallets()->first();
-
     $admin = Admin::factory()->create();
 
-    $transaction = $service->record($wallet, 'sale', '100.00', options: [
+    $transaction = $this->service->record($this->wallet, 'sale', '100.00', options: [
         'status' => 'pending',
         'metadata' => [
             'order_id' => 123,
@@ -200,7 +168,7 @@ it('preserves metadata ownership and source when marking failed', function () {
         'source' => TransactionSource::Webhook,
     ]);
 
-    $failed = $service->markFailed(
+    $failed = $this->service->markFailed(
         $transaction,
         'Declined'
     );
@@ -220,18 +188,17 @@ it('preserves metadata ownership and source when marking failed', function () {
 });
 
 it('preserves external reference when marking failed', function () {
-    $service = app(WalletTransactionService::class);
+    $transaction = $this->service->record(
+        $this->wallet,
+        'sale',
+        '100.00',
+        new WalletTransactionReference('stripe', 'pi_failed_123'),
+        [
+            'status' => 'pending',
+        ]
+    );
 
-    $store = Store::factory()->create();
-    $wallet = $store->wallets()->first();
-
-    $transaction = $service->record($wallet, 'sale', '100.00', options: [
-        'status' => 'pending',
-        'external_provider' => 'stripe',
-        'external_reference' => 'pi_failed_123',
-    ]);
-
-    $failed = $service->markFailed(
+    $failed = $this->service->markFailed(
         $transaction,
         'Card declined'
     );
@@ -248,15 +215,10 @@ it('preserves external reference when marking failed', function () {
 
 
 it('preserves balance_after when marking a pending transaction as failed', function () {
-    $service = app(WalletTransactionService::class);
+    $this->service->record($this->wallet, 'sale', '50.00');
 
-    $store = Store::factory()->create();
-    $wallet = $store->wallets()->first();
-
-    $service->record($wallet, 'sale', '50.00');
-
-    $transaction = $service->record(
-        $wallet,
+    $transaction = $this->service->record(
+        $this->wallet,
         'sale',
         '100.00',
         options: [
@@ -267,27 +229,22 @@ it('preserves balance_after when marking a pending transaction as failed', funct
     expect($transaction->balance_after)
         ->toBe('50.00');
 
-    $failed = $service->markFailed($transaction);
+    $failed = $this->service->markFailed($transaction);
 
     expect($failed->balance_after)
         ->toBe('50.00')
-        ->and($wallet->fresh()->balance)
+        ->and($this->wallet->fresh()->balance)
         ->toBe('50.00');
 });
 
 
 it('does not update wallet last transaction timestamp when marking failed', function () {
-    $service = app(WalletTransactionService::class);
+    $this->service->record($this->wallet, 'sale', '50.00');
 
-    $store = Store::factory()->create();
-    $wallet = $store->wallets()->first();
+    $walletBefore = $this->wallet->fresh();
 
-    $service->record($wallet, 'sale', '50.00');
-
-    $walletBefore = $wallet->fresh();
-
-    $transaction = $service->record(
-        $wallet,
+    $transaction = $this->service->record(
+        $this->wallet,
         'sale',
         '100.00',
         options: [
@@ -295,25 +252,20 @@ it('does not update wallet last transaction timestamp when marking failed', func
         ]
     );
 
-    $service->markFailed($transaction);
+    $this->service->markFailed($transaction);
 
-    $walletAfter = $wallet->fresh();
+    $walletAfter = $this->wallet->fresh();
 
     expect($walletAfter->balance)
         ->toBe($walletBefore->balance)
         ->and($walletAfter->last_transaction_at)
-        ->toBe($walletBefore->last_transaction_at);
+        ->toEqual($walletBefore->last_transaction_at);
 });
 
 
 it('ignores dirty wallet changes when marking failed', function () {
-    $service = app(WalletTransactionService::class);
-
-    $store = Store::factory()->create();
-    $wallet = $store->wallets()->first();
-
-    $transaction = $service->record(
-        $wallet,
+    $transaction = $this->service->record(
+        $this->wallet,
         'sale',
         '100.00',
         options: [
@@ -321,25 +273,20 @@ it('ignores dirty wallet changes when marking failed', function () {
         ]
     );
 
-    $wallet->balance = '9999.00';
+    $this->wallet->balance = '9999.00';
 
-    $failed = $service->markFailed($transaction);
+    $failed = $this->service->markFailed($transaction);
 
     expect($failed->status->slug)
         ->toBe('failed')
-        ->and($wallet->fresh()->balance)
+        ->and($this->wallet->fresh()->balance)
         ->toBe('0.00');
 });
 
 
 it('marks a pending transaction loaded from database as failed', function () {
-    $service = app(WalletTransactionService::class);
-
-    $store = Store::factory()->create();
-    $wallet = $store->wallets()->first();
-
-    $transaction = $service->record(
-        $wallet,
+    $transaction = $this->service->record(
+        $this->wallet,
         'sale',
         '100.00',
         options: [
@@ -354,7 +301,7 @@ it('marks a pending transaction loaded from database as failed', function () {
     expect($freshTransaction->status->slug)
         ->toBe('pending');
 
-    $failed = $service->markFailed(
+    $failed = $this->service->markFailed(
         $staleTransaction,
         'Gateway timeout'
     );
@@ -367,13 +314,8 @@ it('marks a pending transaction loaded from database as failed', function () {
 
 
 it('does not mutate transaction amount when marking failed', function () {
-    $service = app(WalletTransactionService::class);
-
-    $store = Store::factory()->create();
-    $wallet = $store->wallets()->first();
-
-    $transaction = $service->record(
-        $wallet,
+    $transaction = $this->service->record(
+        $this->wallet,
         'sale',
         '125.50',
         options: [
@@ -383,7 +325,7 @@ it('does not mutate transaction amount when marking failed', function () {
 
     $amountBefore = $transaction->amount;
 
-    $failed = $service->markFailed(
+    $failed = $this->service->markFailed(
         $transaction,
         'Payment rejected'
     );
@@ -394,13 +336,8 @@ it('does not mutate transaction amount when marking failed', function () {
 
 
 it('keeps failed transaction data after refreshing model', function () {
-    $service = app(WalletTransactionService::class);
-
-    $store = Store::factory()->create();
-    $wallet = $store->wallets()->first();
-
-    $transaction = $service->record(
-        $wallet,
+    $transaction = $this->service->record(
+        $this->wallet,
         'sale',
         '80.00',
         options: [
@@ -411,7 +348,7 @@ it('keeps failed transaction data after refreshing model', function () {
         ]
     );
 
-    $service->markFailed(
+    $this->service->markFailed(
         $transaction,
         'Timeout'
     );
@@ -430,13 +367,8 @@ it('keeps failed transaction data after refreshing model', function () {
 
 
 it('does not create additional transactions when marking failed', function () {
-    $service = app(WalletTransactionService::class);
-
-    $store = Store::factory()->create();
-    $wallet = $store->wallets()->first();
-
-    $transaction = $service->record(
-        $wallet,
+    $transaction = $this->service->record(
+        $this->wallet,
         'sale',
         '100.00',
         options: [
@@ -444,25 +376,20 @@ it('does not create additional transactions when marking failed', function () {
         ]
     );
 
-    $countBefore = $wallet->transactions()->count();
+    $countBefore = $this->wallet->transactions()->count();
 
-    $service->markFailed($transaction);
+    $this->service->markFailed($transaction);
 
-    expect($wallet->transactions()->count())
+    expect($this->wallet->transactions()->count())
         ->toBe($countBefore)
-        ->and($wallet->fresh()->balance)
+        ->and($this->wallet->fresh()->balance)
         ->toBe('0.00');
 });
 
 
 it('keeps wallet state unchanged when marking failed twice concurrently', function () {
-    $service = app(WalletTransactionService::class);
-
-    $store = Store::factory()->create();
-    $wallet = $store->wallets()->first();
-
-    $transaction = $service->record(
-        $wallet,
+    $transaction = $this->service->record(
+        $this->wallet,
         'sale',
         '100.00',
         options: [
@@ -470,22 +397,22 @@ it('keeps wallet state unchanged when marking failed twice concurrently', functi
         ]
     );
 
-    $service->markFailed(
+    $this->service->markFailed(
         $transaction,
         'First attempt'
     );
 
-    expect(fn () => $service->markFailed(
+    expect(fn () => $this->service->markFailed(
         $transaction,
         'Second attempt'
     ))
         ->toThrow(
-            RuntimeException::class,
+            TransactionNotPendingException::class,
             'Only pending transactions can be marked as failed.'
         );
 
     expect($transaction->fresh()->status->slug)
         ->toBe('failed')
-        ->and($wallet->fresh()->balance)
+        ->and($this->wallet->fresh()->balance)
         ->toBe('0.00');
 });
