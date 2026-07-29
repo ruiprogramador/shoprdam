@@ -5,6 +5,7 @@ use App\Models\Store;
 use App\Models\StoreWallet;
 use App\Models\StoreWalletTransaction;
 use App\Services\Wallet\WalletTransactionService;
+use Illuminate\Testing\TestResponse;
 
 function recordTransaction(
     string $category,
@@ -43,4 +44,62 @@ function expectWalletUnchanged(StoreWallet $before): void
         ->toBe($before->balance)
         ->and($after->last_transaction_at)
         ->toEqual($before->last_transaction_at);
+}
+
+/**
+ * Post a raw, Stripe-signed webhook payload to the stripe.webhook route,
+ * the same way Stripe's servers would (no session, no CSRF token, a
+ * Stripe-Signature header computed from the shared webhook secret).
+ */
+function postStripeWebhook(array $event, ?string $secret = null): TestResponse
+{
+    $secret ??= config('services.stripe.webhook_secret');
+    $payload = json_encode($event);
+    $timestamp = time();
+    $signature = hash_hmac('sha256', "{$timestamp}.{$payload}", $secret);
+
+    return test()->call(
+        method: 'POST',
+        uri: route('stripe.webhook'),
+        server: ['HTTP_STRIPE_SIGNATURE' => "t={$timestamp},v1={$signature}"],
+        content: $payload,
+    );
+}
+
+function stripePaymentIntentEvent(string $type, string $paymentIntentId, array $overrides = []): array
+{
+    return [
+        'id' => 'evt_'.str()->random(16),
+        'object' => 'event',
+        'type' => $type,
+        'data' => [
+            'object' => array_merge([
+                'id' => $paymentIntentId,
+                'object' => 'payment_intent',
+                'amount' => 10000,
+                'currency' => 'eur',
+                'status' => $type === 'payment_intent.succeeded' ? 'succeeded' : 'requires_payment_method',
+                'metadata' => [],
+                'last_payment_error' => null,
+            ], $overrides),
+        ],
+    ];
+}
+
+function stripeChargeRefundedEvent(string $chargeId, string $paymentIntentId, array $overrides = []): array
+{
+    return [
+        'id' => 'evt_'.str()->random(16),
+        'object' => 'event',
+        'type' => 'charge.refunded',
+        'data' => [
+            'object' => array_merge([
+                'id' => $chargeId,
+                'object' => 'charge',
+                'payment_intent' => $paymentIntentId,
+                'amount_refunded' => 10000,
+                'refunded' => true,
+            ], $overrides),
+        ],
+    ];
 }
