@@ -5,23 +5,16 @@ use App\Domain\Wallet\Exceptions\InvalidTransactionAmountException;
 use App\Domain\Wallet\WalletTransactionReference;
 use App\Enums\TransactionSource;
 use App\Models\Admin;
-use App\Models\Store;
 use App\Models\StoreWalletTransaction;
-use App\Services\Wallet\WalletTransactionService;
+use Illuminate\Database\QueryException;
 
 beforeEach(function () {
-    $this->service = app(WalletTransactionService::class);
-    $this->store = Store::factory()->create();
-    $this->wallet = $this->store->wallets()->first();
+    $this->service = walletService();
+    [$this->store, $this->wallet] = createStoreWithWallet();
 });
 
-
 it('records a credit transaction and increases the wallet balance', function () {
-    $transaction = $this->service->record(
-        $this->wallet,
-        'sale',
-        '100.00'
-    );
+    $transaction = recordTransaction('sale', '100.00');
 
     $wallet = $this->wallet->fresh();
 
@@ -45,19 +38,10 @@ it('records a credit transaction and increases the wallet balance', function () 
         ->toBe(1);
 });
 
-
 it('records a debit transaction and decreases the wallet balance', function () {
-    $this->service->record(
-        $this->wallet,
-        'sale',
-        '100.00'
-    );
+    recordTransaction('sale', '100.00');
 
-    $transaction = $this->service->record(
-        $this->wallet,
-        'commission',
-        '10.00'
-    );
+    $transaction = recordTransaction('commission', '10.00');
 
     expect($transaction->category->slug)
         ->toBe('commission')
@@ -71,33 +55,19 @@ it('records a debit transaction and decreases the wallet balance', function () {
         ->toBe('completed');
 });
 
-
 it('rejects zero and negative amounts', function () {
-    expect(fn () => $this->service->record(
-        $this->wallet,
-        'sale',
-        '0.00'
-    ))
+    expect(fn () => recordTransaction('sale', '0.00'))
         ->toThrow(InvalidTransactionAmountException::class);
 
-    expect(fn () => $this->service->record(
-        $this->wallet,
-        'sale',
-        '-10.00'
-    ))
+    expect(fn () => recordTransaction('sale', '-10.00'))
         ->toThrow(InvalidTransactionAmountException::class);
 
     expect($this->wallet->fresh()->balance)
         ->toBe('0.00');
 });
 
-
 it('rejects debit transactions that exceed wallet balance', function () {
-    expect(fn () => $this->service->record(
-        $this->wallet,
-        'commission',
-        '50.00'
-    ))
+    expect(fn () => recordTransaction('commission', '50.00'))
         ->toThrow(
             InsufficientWalletBalanceException::class,
             'Insufficient wallet balance for this transaction.'
@@ -109,26 +79,16 @@ it('rejects debit transactions that exceed wallet balance', function () {
         ->toBe(0);
 });
 
-
 it('supports decimal precision correctly', function () {
-    $transaction = $this->service->record(
-        $this->wallet,
-        'sale',
-        '10.55'
-    );
+    $transaction = recordTransaction('sale', '10.55');
 
-    $this->service->record(
-        $this->wallet,
-        'commission',
-        '0.55'
-    );
+    recordTransaction('commission', '0.55');
 
     expect($transaction->amount)
         ->toBe('10.55')
         ->and($this->wallet->fresh()->balance)
         ->toBe('10.00');
 });
-
 
 it('stores optional metadata description and external reference', function () {
     $reference = new WalletTransactionReference(
@@ -163,7 +123,6 @@ it('stores optional metadata description and external reference', function () {
         ->and($transaction->source)
         ->toBe(TransactionSource::Webhook);
 });
-
 
 it('links referenceable models correctly', function () {
     $transaction = $this->service->record(
@@ -211,15 +170,10 @@ it('records pending transactions without affecting wallet balance', function () 
         ->toBe($lastTransactionAt);
 });
 
-
 it('ignores dirty wallet changes when recording a transaction', function () {
     $this->wallet->balance = '9999.00';
 
-    $transaction = $this->service->record(
-        $this->wallet,
-        'sale',
-        '25.00'
-    );
+    $transaction = recordTransaction('sale', '25.00');
 
     expect($transaction->balance_after)
         ->toBe('25.00')
@@ -228,16 +182,11 @@ it('ignores dirty wallet changes when recording a transaction', function () {
         ->and($this->wallet->fresh()->last_transaction_at)
         ->not->toBeNull();
 });
-
 
 it('ignores dirty wallet timestamps when recording a transaction', function () {
     $this->wallet->last_transaction_at = now()->addYear();
 
-    $transaction = $this->service->record(
-        $this->wallet,
-        'sale',
-        '50.00'
-    );
+    $transaction = recordTransaction('sale', '50.00');
 
     expect($transaction->balance_after)
         ->toBe('50.00')
@@ -246,7 +195,6 @@ it('ignores dirty wallet timestamps when recording a transaction', function () {
         ->and($this->wallet->fresh()->last_transaction_at)
         ->not->toBeNull();
 });
-
 
 it('returns existing transaction for duplicated external reference', function () {
     $reference = new WalletTransactionReference(
@@ -277,7 +225,6 @@ it('returns existing transaction for duplicated external reference', function ()
         ->and($this->wallet->transactions()->count())
         ->toBe(1);
 });
-
 
 it('ignores external_provider and external_reference options since only the reference parameter drives idempotency', function () {
     $first = $this->service->record(
@@ -313,7 +260,6 @@ it('ignores external_provider and external_reference options since only the refe
         ->and($second->external_reference)
         ->toBeNull();
 });
-
 
 it('promotes an existing pending transaction with same external reference', function () {
     $reference = new WalletTransactionReference(
@@ -354,7 +300,6 @@ it('promotes an existing pending transaction with same external reference', func
         ->and($this->wallet->fresh()->balance)
         ->toBe('100.00');
 });
-
 
 it('does not overwrite original payload when promoting pending transaction', function () {
     $admin = Admin::factory()->create();
@@ -413,13 +358,8 @@ it('does not overwrite original payload when promoting pending transaction', fun
         ->toBe($admin->id);
 });
 
-
 it('fails promoting pending debit transaction when balance is insufficient', function () {
-    $this->service->record(
-        $this->wallet,
-        'sale',
-        '50.00'
-    );
+    recordTransaction('sale', '50.00');
 
     $reference = new WalletTransactionReference(
         'stripe',
@@ -479,34 +419,26 @@ it('stores the transaction creator and keeps the relationship', function () {
         ->toBeTrue();
 });
 
-
 it('uses system source by default', function () {
-    $transaction = $this->service->record(
-        $this->wallet,
-        'sale',
-        '100.00'
-    );
+    $transaction = recordTransaction('sale', '100.00');
 
     expect($transaction->source)
         ->toBe(TransactionSource::System);
 });
 
-
 it('throws when using an unknown transaction status without mutating wallet', function () {
     $snapshot = $this->wallet->fresh();
 
-    expect(fn () =>
-        $this->service->record(
-            $this->wallet,
-            'sale',
-            '100.00',
-            null,
-            [
-                'status' => 'unknown_status',
-            ]
-        )
+    expect(fn () => $this->service->record(
+        $this->wallet,
+        'sale',
+        '100.00',
+        null,
+        [
+            'status' => 'unknown_status',
+        ]
+    )
     )->toThrow(RuntimeException::class);
-
 
     expect($this->wallet->fresh()->balance)
         ->toBe($snapshot->balance)
@@ -516,16 +448,9 @@ it('throws when using an unknown transaction status without mutating wallet', fu
         ->toBe($snapshot->last_transaction_at);
 });
 
-
 it('throws when using an unknown transaction category without mutating wallet', function () {
-    expect(fn () =>
-        $this->service->record(
-            $this->wallet,
-            'invalid-category',
-            '100.00'
-        )
+    expect(fn () => recordTransaction('invalid-category', '100.00')
     )->toThrow(RuntimeException::class);
-
 
     expect($this->wallet->fresh()->balance)
         ->toBe('0.00')
@@ -534,7 +459,6 @@ it('throws when using an unknown transaction category without mutating wallet', 
         ->and($this->wallet->fresh()->last_transaction_at)
         ->toBeNull();
 });
-
 
 it('keeps independent pending transactions isolated', function () {
     $first = $this->service->record(
@@ -565,22 +489,16 @@ it('keeps independent pending transactions isolated', function () {
         ->toBe(2);
 });
 
-
 it('does not mutate original model instance after recording', function () {
     $this->wallet->balance = '9999.00';
 
-    $transaction = $this->service->record(
-        $this->wallet,
-        'sale',
-        '25.00'
-    );
+    $transaction = recordTransaction('sale', '25.00');
 
     expect($transaction->balance_after)
         ->toBe('25.00')
         ->and($this->wallet->fresh()->balance)
         ->toBe('25.00');
 });
-
 
 it('handles duplicate external references safely at database level', function () {
     StoreWalletTransaction::factory()
@@ -592,26 +510,22 @@ it('handles duplicate external references safely at database level', function ()
             'external_reference' => 'pi_unique_reference',
         ]);
 
-
-    expect(fn () =>
-        StoreWalletTransaction::factory()
-            ->forWallet($this->wallet)
-            ->sale()
-            ->amount('50.00')
-            ->create([
-                'external_provider' => 'stripe',
-                'external_reference' => 'pi_unique_reference',
-            ])
-    )->toThrow(\Illuminate\Database\QueryException::class);
+    expect(fn () => StoreWalletTransaction::factory()
+        ->forWallet($this->wallet)
+        ->sale()
+        ->amount('50.00')
+        ->create([
+            'external_provider' => 'stripe',
+            'external_reference' => 'pi_unique_reference',
+        ])
+    )->toThrow(QueryException::class);
 });
-
 
 it('returns an existing transaction when external reference already exists before recording', function () {
     $reference = new WalletTransactionReference(
         'stripe',
         'race_reference'
     );
-
 
     $existing = StoreWalletTransaction::factory()
         ->forWallet($this->wallet)
@@ -622,7 +536,6 @@ it('returns an existing transaction when external reference already exists befor
             'external_reference' => $reference->reference,
         ]);
 
-
     $result = $this->service->record(
         $this->wallet,
         'sale',
@@ -630,33 +543,18 @@ it('returns an existing transaction when external reference already exists befor
         $reference
     );
 
-
     expect($result->id)
         ->toBe($existing->id)
         ->and($this->wallet->transactions()->count())
         ->toBe(1);
 });
 
-
 it('records multiple transactions sequentially keeping balances correct', function () {
-    $first = $this->service->record(
-        $this->wallet,
-        'sale',
-        '100.00'
-    );
+    $first = recordTransaction('sale', '100.00');
 
-    $second = $this->service->record(
-        $this->wallet,
-        'sale',
-        '50.00'
-    );
+    $second = recordTransaction('sale', '50.00');
 
-    $third = $this->service->record(
-        $this->wallet,
-        'commission',
-        '30.00'
-    );
-
+    $third = recordTransaction('commission', '30.00');
 
     expect($first->balance_after)
         ->toBe('100.00')

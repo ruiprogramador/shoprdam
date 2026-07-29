@@ -4,8 +4,8 @@ namespace App\Services\Wallet;
 
 use App\Models\Store;
 use App\Models\StoreWallet;
-use Nnjeim\World\Models\Currency;
 use Illuminate\Support\Facades\DB;
+use Nnjeim\World\Models\Currency;
 use RuntimeException;
 
 class WalletService
@@ -32,7 +32,7 @@ class WalletService
         return DB::transaction(function () use ($store, $currencyId) {
             return StoreWallet::firstOrCreate(
                 [
-                    'store_id'    => $store->id,
+                    'store_id' => $store->id,
                     'currency_id' => $currencyId,
                 ],
                 [

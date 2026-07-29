@@ -4,6 +4,4 @@ namespace App\Domain\Wallet\Exceptions;
 
 use RuntimeException;
 
-abstract class WalletTransactionException extends RuntimeException
-{
-}
+abstract class WalletTransactionException extends RuntimeException {}

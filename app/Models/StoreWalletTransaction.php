@@ -3,16 +3,16 @@
 namespace App\Models;
 
 use App\Enums\TransactionSource;
-use Illuminate\Database\Eloquent\Model;
 use Illuminate\Database\Eloquent\Concerns\HasUuids;
 use Illuminate\Database\Eloquent\Factories\HasFactory;
+use Illuminate\Database\Eloquent\Model;
 use Illuminate\Database\Eloquent\Relations\BelongsTo;
-use Illuminate\Database\Eloquent\Relations\MorphTo;
 use Illuminate\Database\Eloquent\Relations\HasMany;
+use Illuminate\Database\Eloquent\Relations\MorphTo;
 
 class StoreWalletTransaction extends Model
 {
-    use HasUuids, HasFactory;
+    use HasFactory, HasUuids;
 
     protected $fillable = [
         'store_wallet_id',
@@ -32,10 +32,10 @@ class StoreWalletTransaction extends Model
     ];
 
     protected $casts = [
-        'amount'        => 'decimal:2',
+        'amount' => 'decimal:2',
         'balance_after' => 'decimal:2',
-        'metadata'      => 'array',
-        'source'        => TransactionSource::class,
+        'metadata' => 'array',
+        'source' => TransactionSource::class,
     ];
 
     public function uniqueIds(): array
@@ -80,7 +80,7 @@ class StoreWalletTransaction extends Model
 
     public function isReversal(): bool
     {
-        return !is_null($this->related_transaction_id);
+        return ! is_null($this->related_transaction_id);
     }
 
     public function isCompleted(): bool

@@ -2,16 +2,15 @@
 
 namespace App\Models;
 
-use Illuminate\Database\Eloquent\Model;
-use Illuminate\Database\Eloquent\Relations\HasMany;
-use Illuminate\Database\Eloquent\Builder;
-use App\Traits\HasSlugLookup;
 use App\Traits\HasActiveScope;
 use App\Traits\HasOrderedScope;
+use App\Traits\HasSlugLookup;
+use Illuminate\Database\Eloquent\Model;
+use Illuminate\Database\Eloquent\Relations\HasMany;
 
 class TransactionStatus extends Model
 {
-    use HasSlugLookup, HasActiveScope, HasOrderedScope;
+    use HasActiveScope, HasOrderedScope, HasSlugLookup;
 
     protected $fillable = ['name', 'slug', 'is_active', 'description', 'sort_order'];
 

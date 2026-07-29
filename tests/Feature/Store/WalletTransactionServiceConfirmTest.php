@@ -5,20 +5,16 @@ use App\Domain\Wallet\Exceptions\TransactionNotPendingException;
 use App\Domain\Wallet\WalletTransactionReference;
 use App\Enums\TransactionSource;
 use App\Models\Admin;
-use App\Models\Store;
+use App\Models\StoreWallet;
 use App\Models\TransactionStatus;
-use App\Services\Wallet\WalletTransactionService;
 
 beforeEach(function () {
-    $this->service = app(WalletTransactionService::class);
-    $this->store = Store::factory()->create();
-    $this->wallet = $this->store->wallets()->first();
+    $this->service = walletService();
+    [$this->store, $this->wallet] = createStoreWithWallet();
 });
 
 it('confirms a pending credit transaction and increases the wallet balance', function () {
-    $transaction = $this->service->record($this->wallet, 'sale', '100.00', options: [
-        'status' => 'pending',
-    ]);
+    $transaction = recordPendingTransaction('sale', '100.00');
 
     $wallet = $this->wallet->fresh();
 
@@ -47,13 +43,10 @@ it('confirms a pending credit transaction and increases the wallet balance', fun
         ->toBe('100.00');
 });
 
-
 it('confirms a pending debit transaction and decreases the wallet balance', function () {
-    $this->service->record($this->wallet, 'sale', '100.00');
+    recordTransaction('sale', '100.00');
 
-    $transaction = $this->service->record($this->wallet, 'commission', '30.00', options: [
-        'status' => 'pending',
-    ]);
+    $transaction = recordPendingTransaction('commission', '30.00');
 
     expect($this->wallet->fresh()->balance)
         ->toBe('100.00');
@@ -72,13 +65,10 @@ it('confirms a pending debit transaction and decreases the wallet balance', func
         ->not->toBeNull();
 });
 
-
 it('confirms a pending debit transaction that reduces the balance to zero', function () {
-    $this->service->record($this->wallet, 'sale', '40.00');
+    recordTransaction('sale', '40.00');
 
-    $transaction = $this->service->record($this->wallet, 'commission', '40.00', options: [
-        'status' => 'pending',
-    ]);
+    $transaction = recordPendingTransaction('commission', '40.00');
 
     $confirmed = $this->service->confirm($transaction);
 
@@ -95,11 +85,8 @@ it('confirms a pending debit transaction that reduces the balance to zero', func
         ->toBe('0.00');
 });
 
-
 it('confirms a pending transaction loaded from database ignoring stale model state', function () {
-    $transaction = $this->service->record($this->wallet, 'sale', '75.00', options: [
-        'status' => 'pending',
-    ]);
+    $transaction = recordPendingTransaction('sale', '75.00');
 
     $staleTransaction = $transaction;
 
@@ -117,7 +104,6 @@ it('confirms a pending transaction loaded from database ignoring stale model sta
         ->and($this->wallet->fresh()->balance)
         ->toBe('75.00');
 });
-
 
 it('throws an exception when confirming a non-pending transaction', function (string $statusSlug) {
     $transaction = $this->service->record($this->wallet, 'sale', '100.00', options: [
@@ -143,11 +129,8 @@ it('throws an exception when confirming a non-pending transaction', function (st
     'failed',
 ]);
 
-
 it('throws an exception when confirming would result in negative balance', function () {
-    $transaction = $this->service->record($this->wallet, 'commission', '50.00', options: [
-        'status' => 'pending',
-    ]);
+    $transaction = recordPendingTransaction('commission', '50.00');
 
     $snapshot = $transaction->fresh();
 
@@ -168,9 +151,7 @@ it('throws an exception when confirming would result in negative balance', funct
 });
 
 it('throws an exception when confirming an already confirmed transaction', function () {
-    $transaction = $this->service->record($this->wallet, 'sale', '100.00', options: [
-        'status' => 'pending',
-    ]);
+    $transaction = recordPendingTransaction('sale', '100.00');
 
     $this->service->confirm($transaction);
 
@@ -186,11 +167,8 @@ it('throws an exception when confirming an already confirmed transaction', funct
         ->toBe(1);
 });
 
-
 it('ignores dirty in-memory changes when confirming a pending transaction', function () {
-    $transaction = $this->service->record($this->wallet, 'sale', '25.00', options: [
-        'status' => 'pending',
-    ]);
+    $transaction = recordPendingTransaction('sale', '25.00');
 
     $transaction->amount = '999.00';
     $transaction->transaction_status_id = TransactionStatus::bySlugOrFail('completed')->id;
@@ -210,7 +188,6 @@ it('ignores dirty in-memory changes when confirming a pending transaction', func
         ->and($confirmed->fresh()->amount)
         ->toBe('25.00');
 });
-
 
 it('preserves external reference when confirming a transaction', function () {
     $transaction = $this->service->record(
@@ -235,7 +212,6 @@ it('preserves external reference when confirming a transaction', function () {
         ->toBe('pi_confirm_123');
 });
 
-
 it('preserves descriptive transaction data when confirming', function () {
     $transaction = $this->service->record($this->wallet, 'sale', '100.00', options: [
         'status' => 'pending',
@@ -256,7 +232,6 @@ it('preserves descriptive transaction data when confirming', function () {
             'order_id' => 123,
         ]);
 });
-
 
 it('preserves transaction ownership and source when confirming', function () {
     $admin = Admin::factory()->create();
@@ -282,7 +257,6 @@ it('preserves transaction ownership and source when confirming', function () {
         ->toBeTrue();
 });
 
-
 it('preserves referenceable when confirming a transaction', function () {
     $transaction = $this->service->record($this->wallet, 'sale', '100.00', null, [
         'status' => 'pending',
@@ -301,25 +275,10 @@ it('preserves referenceable when confirming a transaction', function () {
         ->toBeTrue();
 });
 
-
 it('confirms two independent pending transactions correctly', function () {
-    $first = $this->service->record(
-        $this->wallet,
-        'sale',
-        '100.00',
-        options: [
-            'status' => 'pending',
-        ]
-    );
+    $first = recordPendingTransaction('sale', '100.00');
 
-    $second = $this->service->record(
-        $this->wallet,
-        'sale',
-        '50.00',
-        options: [
-            'status' => 'pending',
-        ]
-    );
+    $second = recordPendingTransaction('sale', '50.00');
 
     expect($this->wallet->fresh()->balance)
         ->toBe('0.00');
@@ -339,25 +298,10 @@ it('confirms two independent pending transactions correctly', function () {
         ->toBe('150.00');
 });
 
-
 it('confirms a pending debit transaction after a pending credit transaction in sequence', function () {
-    $credit = $this->service->record(
-        $this->wallet,
-        'sale',
-        '100.00',
-        options: [
-            'status' => 'pending',
-        ]
-    );
+    $credit = recordPendingTransaction('sale', '100.00');
 
-    $debit = $this->service->record(
-        $this->wallet,
-        'commission',
-        '30.00',
-        options: [
-            'status' => 'pending',
-        ]
-    );
+    $debit = recordPendingTransaction('commission', '30.00');
 
     expect($this->wallet->fresh()->balance)
         ->toBe('0.00');
@@ -377,44 +321,40 @@ it('confirms a pending debit transaction after a pending credit transaction in s
         ->toBe('70.00');
 });
 
-
 it('does not mutate wallet when confirmation fails', function () {
-    $transaction = $this->service->record(
-        $this->wallet,
-        'commission',
-        '100.00',
-        options: [
-            'status' => 'pending',
-        ]
-    );
+    $transaction = recordPendingTransaction('commission', '100.00');
 
     $walletBefore = $this->wallet->fresh();
 
     expect(fn () => $this->service->confirm($transaction))
         ->toThrow(InsufficientWalletBalanceException::class);
 
-    $walletAfter = $this->wallet->fresh();
+    expectWalletUnchanged($walletBefore);
 
-    expect($walletAfter->balance)
-        ->toBe($walletBefore->balance)
-        ->and($walletAfter->last_transaction_at)
-        ->toEqual($walletBefore->last_transaction_at)
+    expect($transaction->fresh()->status->slug)
+        ->toBe('pending');
+});
+
+it('rolls back the transaction status if the wallet update fails', function () {
+    $transaction = recordPendingTransaction('sale', '100.00');
+
+    StoreWallet::updating(function () {
+        throw new RuntimeException('Simulated failure during wallet update.');
+    });
+
+    expect(fn () => $this->service->confirm($transaction))
+        ->toThrow(RuntimeException::class, 'Simulated failure during wallet update.');
+
+    expect($this->wallet->fresh()->balance)
+        ->toBe('0.00')
         ->and($transaction->fresh()->status->slug)
         ->toBe('pending');
 });
 
-
 it('updates last_transaction_at when confirming a pending transaction', function () {
     $before = $this->wallet->fresh()->last_transaction_at;
 
-    $transaction = $this->service->record(
-        $this->wallet,
-        'sale',
-        '100.00',
-        options: [
-            'status' => 'pending',
-        ]
-    );
+    $transaction = recordPendingTransaction('sale', '100.00');
 
     $this->service->confirm($transaction);
 

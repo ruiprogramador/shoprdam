@@ -13,7 +13,7 @@ class StoreWallet extends Model
     protected $fillable = ['store_id', 'currency_id', 'balance', 'last_transaction_at'];
 
     protected $casts = [
-        'balance'             => 'decimal:2',
+        'balance' => 'decimal:2',
         'last_transaction_at' => 'datetime',
     ];
 

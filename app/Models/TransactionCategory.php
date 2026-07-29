@@ -3,15 +3,15 @@
 namespace App\Models;
 
 use App\Enums\TransactionDirection;
-use Illuminate\Database\Eloquent\Model;
-use Illuminate\Database\Eloquent\Relations\HasMany;
-use App\Traits\HasSlugLookup;
 use App\Traits\HasActiveScope;
 use App\Traits\HasOrderedScope;
+use App\Traits\HasSlugLookup;
+use Illuminate\Database\Eloquent\Model;
+use Illuminate\Database\Eloquent\Relations\HasMany;
 
 class TransactionCategory extends Model
 {
-    use HasSlugLookup, HasActiveScope, HasOrderedScope;
+    use HasActiveScope, HasOrderedScope, HasSlugLookup;
 
     protected $fillable = ['name', 'slug', 'direction', 'sort_order', 'is_active', 'description'];
 
