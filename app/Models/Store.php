@@ -56,6 +56,11 @@ class Store extends Model
         return $this->hasMany(StoreWallet::class);
     }
 
+    public function orders(): HasMany
+    {
+        return $this->hasMany(Order::class);
+    }
+
     // Accessors
     public function getLogoUrlAttribute(): string
     {

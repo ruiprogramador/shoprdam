@@ -18,6 +18,7 @@ class TestingLookupSeeder extends Seeder
             StoreStatusSeeder::class,
             TransactionStatusSeeder::class,
             TransactionCategorySeeder::class,
+            OrderStatusSeeder::class,
         ]);
     }
 }
