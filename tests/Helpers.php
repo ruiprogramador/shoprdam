@@ -78,7 +78,11 @@ function stripePaymentIntentEvent(string $type, string $paymentIntentId, array $
                 'object' => 'payment_intent',
                 'amount' => 10000,
                 'currency' => 'eur',
-                'status' => $type === 'payment_intent.succeeded' ? 'succeeded' : 'requires_payment_method',
+                'status' => match ($type) {
+                    'payment_intent.succeeded' => 'succeeded',
+                    'payment_intent.canceled' => 'canceled',
+                    default => 'requires_payment_method',
+                },
                 'metadata' => [],
                 'last_payment_error' => null,
             ], $overrides),
