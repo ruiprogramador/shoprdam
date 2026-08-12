@@ -1,146 +1,186 @@
-Shop Rdam
+# 🛍️ Shop Rdam
 
-A modern multi-vendor e-commerce platform built with Laravel 12, inspired by the Udemy course “Laravel 12: Build a Multi-Vendor Ecommerce Website (2025)”.
-The UI is powered by the Tabler admin dashboard template for a clean, responsive, and highly customizable experience.
+A multi-vendor e-commerce platform built with **Laravel 12** — vendor onboarding
+and approval, product catalog, Stripe checkout, commission handling, queued jobs
+and real-time events, with an automated test suite.
 
-🚀 About the Project
+![Laravel](https://img.shields.io/badge/Laravel-12-FF2D20?logo=laravel&logoColor=white)
+![PHP](https://img.shields.io/badge/PHP-8.2%2B-777BB4?logo=php&logoColor=white)
+![Inertia](https://img.shields.io/badge/Inertia.js-v2-9553E9)
+![Pest](https://img.shields.io/badge/Tested%20with-Pest%204-46B555)
+![License](https://img.shields.io/badge/License-MIT-blue)
 
-Shop Rdam is a learning-focused project designed to explore and implement a complete multi-vendor e-commerce system using Laravel 12.
-The platform includes vendor management, product listings, order processing, role-based authentication, and a fully-featured back office.
+---
 
-This project follows the structure and development workflow taught in the Udemy course while adding personal enhancements and improvements.
+## 🚀 About
 
-🎯 Key Features
-🛒 Frontend
+Shop Rdam is a full multi-vendor marketplace: vendors register and get approved,
+list their own products, manage their orders and track their earnings, while the
+platform takes a commission on every sale.
 
--> Product catalog & categories
+I built it to work end to end with a modern Laravel stack — Inertia for the
+SPA layer, Redis-backed queues via Horizon, WebSockets via Reverb, Stripe for
+payments, and a Pest test suite running in CI.
 
--> Product details page
+---
 
--> Cart & checkout flow
+## 🧩 Tech Stack
 
--> Customer authentication
+### ⚙️ Backend
+| | |
+|---|---|
+| **Framework** | Laravel 12 (PHP 8.2+) |
+| **SPA layer** | Inertia.js v2 + Ziggy + Laravel Wayfinder |
+| **Auth** | Laravel Breeze · Laravel Sanctum (API tokens) |
+| **Queues** | Laravel Horizon (Redis) |
+| **Real-time** | Laravel Reverb (WebSockets) |
+| **Database** | MySQL |
+| **Architecture** | `lorisleiva/laravel-actions` · `spatie/laravel-query-builder` |
 
--> Order history
+### 🎨 Frontend
+| | |
+|---|---|
+| **Framework** | Vue 3 + TypeScript <!-- ⚠️ CONFIRMA: composer.json diz laravel/blank-vue-starter-kit --> |
+| **Styling** | Tailwind CSS |
+| **Build** | Vite |
+| **Admin UI** | Tabler dashboard template |
 
-🏪 Vendor Features
+### 🔌 Integrations
+| | |
+|---|---|
+| **Payments** | Stripe (`stripe-php` v21) |
+| **Images** | Intervention Image |
+| **Reports** | Laravel Excel (`maatwebsite/excel`) |
+| **i18n** | `spatie/laravel-translation-loader` · Google Translate PHP |
+| **Geo data** | `nnjeim/world` |
 
--> Vendor registration & approval
+### 🧪 Quality & Tooling
+| | |
+|---|---|
+| **Testing** | Pest 4 + `pest-plugin-laravel` · Mockery · Faker |
+| **Code style** | Laravel Pint (PSR-12) · ESLint · Prettier |
+| **CI** | GitHub Actions <!-- ⚠️ CONFIRMA o que corre em .github/workflows --> |
+| **Local env** | Laravel Sail (Docker) · Laravel Herd |
+| **Debugging** | Laravel Pail · Log Viewer |
 
--> Vendor dashboard
+---
 
--> Product CRUD
+## 🎯 Features
 
--> Order management
+### 🛒 Storefront
+- Product catalog with categories and attributes
+- Product detail pages
+- Cart and Stripe checkout flow
+- Customer authentication and account area
+- Order history
 
--> Earnings overview
+### 🏪 Vendor
+- Registration and admin approval flow
+- Vendor dashboard
+- Product CRUD with secure image uploads
+- Order management
+- Earnings overview and reports
 
-⚙️ Admin Panel (powered by Tabler UI)
+### 🛠️ Admin
+- Manage vendors and customers
+- Approve / ban vendors
+- Global product management
+- Category and attribute management
+- System settings
 
--> Manage vendors & customers
+### 💰 Business logic
+- Per-vendor commission model
+- Order payment workflow
+- Vendor earnings reports (exportable)
+- Stock control
 
--> Approve/ban vendors
+### 🔐 Security
+- Role-based permissions (Admin · Vendor · Customer)
+- Sanctum tokens for API access
+- CSRF protection and request validation
+- Secure file uploads
 
--> Global product management
+---
 
--> Category & attribute management
+## 📁 Project Structure
 
-System settings
-
-🔐 Authentication & Security
-
--> Laravel Breeze
-
--> Role-based permissions (Admin, Vendor, Customer)
-
--> CSRF & input validation
-
--> Secure file uploads
-
-💰 Business Logic
-
--> Multi-vendor commissions
-
--> Order payment workflow
-
--> Vendor earnings reports
-
--> Product stock system
-
-🧩 Tech Stack
-Framework	      :   Laravel 12 (PHP 8.3+)
-Frontend        :   UI	Tabler Admin Template
-Database	      :   MySQL
-Authentication  :  Laravel Breeze
-Package         :  Composer, NPM
-Deployment	    :  Laravel Herd
-📁 Project Structure
+```
 shoprdam/
+├── .github/workflows/   # CI pipeline
+├── app/                 # Actions, models, HTTP layer
+├── bootstrap/
+├── config/
+├── database/            # Migrations, factories, seeders
+├── docs/                # Feature documentation
+├── public/
+├── resources/
+│   ├── js/              # Vue 3 + TypeScript
+│   ├── css/             # Tailwind
+│   └── views/
+├── routes/
+├── storage/
+└── tests/               # Pest suite
+```
 
-│── app/
+---
 
-│── bootstrap/
+## 🛠️ Getting Started
 
-│── config/
+### 1️⃣ Clone
 
-│── database/
-
-│── public/
-
-│── resources/
-
-│   ├── views/
-
-│   ├── js/
-
-│   └── css/
-
-│── routes/
-
-│── storage/
-
-└── tests/
-
-🛠️ Installation & Setup
-1️⃣ Clone the repository
-git clone https://github.com/your-username/shoprdam.git
+```bash
+git clone https://github.com/ruiprogramador/shoprdam.git
 cd shoprdam
+```
 
-2️⃣ Install dependencies
-composer install
-npm install
+### 2️⃣ Set up
 
-3️⃣ Environment configuration
-cp .env.example .env
-php artisan key:generate
+```bash
+composer setup
+```
 
+Runs `composer install`, creates `.env`, generates the app key, migrates the
+database and builds the frontend assets in one step.
 
-Update your .env with database credentials and mail settings.
+Update `.env` with your database, mail, Stripe and Redis credentials.
 
-4️⃣ Run migrations & seeders
+### 3️⃣ Seed sample data
+
+```bash
 php artisan migrate --seed
+```
 
-5️⃣ Compile frontend assets
-npm run dev
+### 4️⃣ Run
 
-6️⃣ Start the development server
-php artisan serve
+```bash
+composer dev
+```
 
-🎨 UI Template
+Starts the dev server, the queue worker and Vite together.
 
-This project uses the Tabler Dashboard Template, which offers a clean, modern admin interface:
-(Template used: https://preview.tabler.io/)
+For SSR: `composer dev:ssr`
 
-📚 Course Reference
+---
 
-This project follows and expands upon the Udemy course:
-“Laravel 12: Build a Multi-Vendor Ecommerce Website (2025)”
+## 🧪 Tests
 
-🤝 Contributing
+```bash
+composer test
+```
 
-Contributions, suggestions, and improvements are welcome.
-Feel free to submit a pull request or open an issue.
+Runs the Pest suite. Check code style with:
 
-📄 License
+```bash
+./vendor/bin/pint --test
+```
 
-This project is for educational purposes.
+---
+
+## 📈 Status
+
+🟢 **Active development.**
+---
+
+## 📄 License
+
+MIT
