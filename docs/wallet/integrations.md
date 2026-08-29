@@ -1,9 +1,15 @@
 # Integrating a payment provider
 
-This is written from the first real integration (Stripe — see
-`App\Payments\Stripe`), as agreed: no `PaymentGateway` interface exists yet.
-One should only be extracted once a second provider needs the same shape,
-so the interface reflects two real implementations instead of a guess.
+This describes the provider-agnostic payments domain (`App\Domain\Payments`)
+and its first real implementation, Stripe (`App\Payments\Stripe`). The
+domain was refactored from an earlier, Stripe-only design (`OrderPaymentIntent`,
+`OrderPaymentIntentAttempt`, `StripePaymentService`, `StripeEventDispatcher`,
+`stripe_unmatched_events`) once a second provider (PayPal, EasyPay, or a
+Multibanco/MB WAY-capable PSP) became a real, near-term requirement — not
+speculatively. Everything below is the current design; where it differs
+from that earlier one, it's because the earlier one baked in an assumption
+("one Order, one PaymentIntent, forever") that stopped being true once a
+customer needed to retry a failed card payment with MB WAY instead.
 
 ## Known production limitations — read before building on top of this
 
@@ -12,344 +18,705 @@ integration — not oversights — but each one is a real constraint on what
 you can safely build on top of this code without redesigning part of it
 first:
 
-- **No partial refunds.** Stripe's `charge.refunded` fires on partial
+- **No partial refunds.** A provider's refund event fires on partial
   refunds too, but this integration only reverses a transaction once the
-  Charge is *fully* refunded (see the event mapping below and
-  [Retries and replays](#retries-and-replays)). A `charge.amount_refunded`
-  of €20 on a €100 sale is silently ignored — the Wallet still shows the
-  full €100 as reversible/settled. **Do not add a partial-refund button, a
-  partial-refund API endpoint, or any other way to trigger a Stripe partial
-  refund** until the Wallet's reversal accounting is redesigned to track
-  refunds individually (own reference per refund, cumulative-not-binary
-  comparison) instead of "all or nothing."
-- **2-decimal currencies only.** `StripeAmount::toMinorUnits()` always
-  multiplies by 100. The `currencies` table already has a real `precision`
+  charge is *fully* refunded (see the event mapping below). A cumulative
+  refunded amount of €20 on a €100 sale is silently ignored — the Wallet
+  still shows the full €100 as reversible/settled. **Do not add a
+  partial-refund button, a partial-refund API endpoint, or any other way to
+  trigger a partial refund** until the Wallet's reversal accounting is
+  redesigned to track refunds individually instead of "all or nothing."
+- **2-decimal currencies only.** `App\Domain\Payments\MinorUnits::fromDecimal()`
+  always multiplies by 100. The `currencies` table has a real `precision`
   column, but nothing here (or in the Wallet's `decimal(_, 2)` schema)
   honors it. **Do not enable a zero-decimal currency (e.g. JPY) or a
-  3-decimal one (e.g. BHD) for Stripe payments** without fixing this at the
-  schema level first — silently doing so would over- or under-charge by a
-  factor of the currency's minor-unit base.
-- **An orphaned Stripe PaymentIntent recovers within `--stale-after` minutes
-  (default 5), not instantly.** If Stripe successfully creates a
-  PaymentIntent but the following `record()` call fails or the process
-  dies, `App\Console\Commands\ReconcileOrphanedPaymentIntents` (scheduled
-  every 5 minutes, see `routes/console.php`) picks it up — see
-  [Recovering orphaned PaymentIntents](#recovering-orphaned-paymentintents-the-order_payment_intent_attempts-outbox).
-  There is still a window before that runs (and, separately, before a run
-  succeeds) where the gap described in
-  [External non-atomicity](#external-non-atomicity-stripe--the-database)
-  is real — this doesn't make the two operations atomic, it bounds how long
-  the inconsistency can persist and automates closing it.
-- **An Order gets at most one PaymentIntent, ever.** `order_payment_intents`
-  has a unique constraint on `order_id`, and
-  `StripePaymentService::createPaymentIntentForOrder()` is idempotent per
-  Order: calling it twice (a plain repeat call, or a genuine race between two
-  requests) returns the same PaymentIntent instead of creating a second one
-  and a second pending Wallet transaction. There is currently no supported
-  way to retry a failed/canceled Order's payment with a *new* PaymentIntent
-  — that would need an explicit product decision (new Order vs. releasing
-  the existing claim) before being built.
+  3-decimal one (e.g. BHD)** without fixing this at the schema level first.
+- **An orphaned remote payment recovers within `--stale-after` minutes
+  (default 5), not instantly.** See
+  [Recovering orphaned payment attempts](#recovering-orphaned-payment-attempts-the-payment_attempts-outbox)
+  and
+  [Terminal webhooks that arrive before a local claim exists](#terminal-webhooks-that-arrive-before-a-local-claim-exists-the-payment_provider_events-inbox).
+- **`payment_provider_events` is not pruned.** Every terminal event this
+  integration can't resolve immediately is kept indefinitely, `applied`
+  rows included. In steady state this table stays small, but an attempt
+  whose claim is never created (`needs_attention`, never manually
+  resolved) leaves its queued events `pending` forever. Add a
+  retention/prune command before relying on this table for anything beyond
+  the replay it exists for.
+- **At most one *non-terminal* attempt per Payment at a time** — see
+  [One Payment, multiple attempts over time — never two live at once](#one-payment-multiple-attempts-over-time--never-two-live-at-once).
+  Concurrent attempts across two providers for the same Payment (e.g. the
+  customer opens two tabs and pays via both Stripe and MB WAY at once) are
+  not supported; the second tab's attempt resumes the first's in-flight
+  attempt instead of starting an independent one.
+
+## Payment vs. PaymentAttempt vs. provider vs. method
+
+Four concepts that are easy to conflate, kept deliberately distinct:
+
+| Concept | What it is | Example |
+|---|---|---|
+| **Payment** | The single financial obligation an Order has. One per Order (`payments.order_id` unique). Owns its own lifecycle (`pending`/`paid`/`failed`/`refunded`) via `App\Domain\Payments\Enums\PaymentStatus`. | "Order #100 owes €42.50." |
+| **PaymentAttempt** | One try to satisfy a Payment through a specific provider/method. Many per Payment *over time*; at most one non-terminal at once. | "Attempt #1: Stripe/card, failed." |
+| **provider** | Which payment service processed the attempt. | `stripe`, `paypal`, `easypay` |
+| **method** | How the customer paid, within that provider. | `card`, `mbway`, `multibanco`, `paypal` |
+
+`provider` and `method` are **not** the same axis: EasyPay is one
+*provider* that can process several *methods* (`mbway`, `multibanco`).
+Modeling MB WAY or Multibanco as their own "provider" would be wrong — they
+share EasyPay's actual integration (auth, API, webhook shape); only the
+`method` column differs. `payment_attempts` carries both as plain strings,
+validated only by what `App\Domain\Payments\PaymentProviderManager` can
+actually resolve a driver for.
+
+## One Payment, multiple attempts over time — never two live at once
+
+```
+Order #100, €42.50
+  |
+  v
+Payment (pending)
+  |
+  +-- PaymentAttempt #1: stripe / card    -> failed
+  +-- PaymentAttempt #2: easypay / mbway  -> expired
+  +-- PaymentAttempt #3: easypay / paypal -> succeeded  => Payment paid
+```
+
+This is the core design decision this refactor made deliberately, not by
+default: a Payment can go through several attempts (a declined card, then
+a different method), but **at most one attempt may be non-terminal at any
+given time** — see `App\Domain\Payments\Enums\PaymentAttemptStatus::blocksNewAttempt()`.
+Starting a *new* attempt while one is still in flight (`pending`/`claimed`)
+or already `succeeded` doesn't create a second row — it resumes the
+existing one. A new attempt is only createable once the current one is
+`failed`.
+
+This is what closes the double-payment risk that unrestricted concurrent
+attempts would open: if two attempts for the same Payment could both be
+"live" at once (e.g. the customer pays via Stripe in one tab and MB WAY in
+another), both could independently reach `succeeded` and double-credit the
+Wallet. Serializing attempt creation — never two non-terminal attempts for
+one Payment — makes that structurally impossible, at the cost of not
+supporting genuinely concurrent multi-channel attempts. If that's ever a
+real requirement, it needs its own explicit design (an idempotent
+"first-succeeded-wins, reverse the other" reconciliation step), not a
+quiet relaxation of this gate.
+
+`App\Domain\Payments\Services\PaymentService::startAttempt()` enforces this
+by locking the Payment row (`lockForUpdate()`), checking its current
+attempt's status, and only then creating a new attempt row — the lock is
+released *before* any remote provider call is ever made (see
+[Transaction boundaries](#transaction-boundaries) below); holding a DB row
+lock across an HTTP call is the anti-pattern this design avoids.
 
 ## The Wallet never sees provider vocabulary
 
-`WalletTransactionService` has no knowledge of Stripe, PaymentIntents,
-Charges, or webhook event types. `App\Payments\Stripe\StripeEventDispatcher`
-is the only class responsible for translating *incoming* Stripe webhook
-events into Wallet operations — that's the direction where Stripe's
-vocabulary must be turned into the Wallet's.
+`WalletTransactionService` has no knowledge of Stripe, PayPal, PaymentIntents,
+webhooks, or any provider's event types — it only ever sees a generic
+`(external_provider, external_reference)` pair via
+`App\Domain\Wallet\WalletTransactionReference`. This didn't need to change
+for this refactor: the Wallet boundary was already provider-agnostic.
+`App\Domain\Payments\Services\PaymentEventProcessor` is the only class
+allowed to translate *incoming* provider events into Wallet operations —
+that's the direction where a provider's vocabulary must be turned into the
+Wallet's.
 
-`StripePaymentService` is the *outbound* counterpart: it creates the Stripe
-PaymentIntent and records the matching pending Wallet transaction, both in
-the same request that starts a payment. It does talk to both Stripe and the
-Wallet, but only ever in that one fixed direction (create intent, then
-record) — it never interprets a Stripe event, which is what keeps the
-webhook-translation responsibility concentrated in the dispatcher.
-`StripeWebhookController` only verifies the webhook signature and hands the
-event to the dispatcher; it talks to Stripe's SDK but never to the Wallet.
+`App\Domain\Payments\Services\PaymentService` is the *outbound* counterpart:
+it starts/resumes attempts and records the matching pending Wallet
+transaction, in the same call that starts a payment. It talks to both a
+resolved provider and the Wallet, but only ever in that one fixed direction
+— it never interprets a provider event, which is what keeps
+webhook-translation responsibility concentrated in the event processor.
 
-## Event -> operation mapping (Stripe)
+## Provider vs. domain: who's allowed to know what
 
-| Stripe event | Wallet operation | Notes |
-|---|---|---|
-| PaymentIntent created (app-initiated, not a webhook) | `record(status: pending)` | Done synchronously in `StripePaymentService::createPaymentIntentForOrder()`, in the same request that creates the PaymentIntent — not in response to a webhook. |
-| `payment_intent.succeeded` | `confirm()` | No-ops (via caught `TransactionNotPendingException`) if the transaction is already `completed` — safe against Stripe's at-least-once webhook delivery. |
-| `payment_intent.payment_failed` | **none — informational only** | Stripe fires this when a single payment *attempt* fails; the PaymentIntent itself is not done and typically reverts to `requires_payment_method`, so the customer can retry with a different payment method and still reach `payment_intent.succeeded`. The handler only logs (id, status, error message) and never touches the Wallet or the Order. |
-| `payment_intent.canceled` | `markFailed()` | Stripe fires this as its own, separate event when the PaymentIntent is actually done (explicitly canceled, or auto-canceled after too many failed attempts / expiry) — this, not `payment_intent.payment_failed`, is what terminally fails the transaction. Matches the Wallet's `failed` status being terminal (see [lifecycle.md](lifecycle.md)): we only ever call `markFailed()` from an event Stripe itself treats as final. Same no-op safety as the other handlers for duplicate deliveries. |
-| `charge.refunded` | `reverse()` | No-ops (via caught `TransactionAlreadyReversedException`) on duplicate delivery. **Only reconciles a fully-refunded Charge.** `charge.amount_refunded` is the Charge's *cumulative* refunded total, not this event's delta, so the dispatcher compares it against the original transaction's full amount and only calls `reverse()` (for the full amount) once they match. Any `charge.refunded` event for a Charge that isn't fully refunded yet — including an intermediate event in a series of partial refunds — is logged and ignored; partial reversals are not accounted for at all. |
+```
+Payments Domain (App\Domain\Payments)
+      |
+      +-- App\Payments\Stripe\StripePaymentProvider    (PaymentProviderContract)
+      +-- App\Payments\Stripe\StripeEventTranslator     (ProviderEventTranslator)
+      +-- App\Payments\Stripe\StripeWebhookController    (Stripe's own route)
+```
 
-Both places that convert a Wallet decimal amount into Stripe's minor-unit
-integer (`record()`'s amount here, and the refund comparison below) go
-through the single `StripeAmount::toMinorUnits()` helper rather than each
-inlining `* 100` — see that class for the 2-decimal-currency assumption it
-still makes.
+`App\Domain\Payments\*` never imports a provider SDK type — enforced by
+`tests/Architecture/PaymentsDomainBoundaryTest.php`, a plain file scan
+(not a dedicated architecture-testing package, for one boundary that
+doesn't need one). Two small contracts define the crossing:
 
-An earlier version of this integration made the mistake of trying to detect
-"the PaymentIntent is really done" by checking `status === 'canceled'` on
-the PaymentIntent embedded in a `payment_intent.payment_failed` event. That
-never actually happens in practice — a failed attempt's status is
-`requires_payment_method`, not `canceled` — so that check was silently dead
-code: `markFailed()` was, for all practical purposes, never reachable, and
-duplicate cancellation testing accidentally tested a payload Stripe never
-sends. `payment_intent.canceled` is what carries that signal for real.
+- **`PaymentProviderContract`** — `name()`, `createOrGetPayment(PaymentAttempt): ProviderPaymentResult`
+  (idempotent — safe to call again for the same attempt), `classifyFailure(Throwable): FailureClass`.
+  Deliberately minimal: capture/authorize/expire aren't here — add a
+  capability-specific interface (like `SupportsCanonicalRetrieval`, used
+  only for the losing-side-of-a-race fallback) once a real provider
+  actually needs it, instead of forcing every adapter to pretend it
+  supports operations it doesn't have.
+- **`ProviderEventTranslator`** — `translate(nativeEvent): ProviderEventOutcome`
+  and `reconstructFromReplayPayload(array): nativeEvent`. The only place
+  allowed to know a provider's own event vocabulary
+  (`payment_intent.succeeded`, `charge.refunded`, ...); everything past
+  `translate()` speaks the domain's small, fixed vocabulary instead
+  (`ProviderEventType::Succeeded|Failed|Refunded|Informational|Unrecognized`).
 
-## One PaymentIntent per Order
+`App\Domain\Payments\PaymentProviderManager` and
+`ProviderEventTranslatorManager` (both thin `Illuminate\Support\Manager`
+subclasses) resolve a provider/translator by name, registered from
+`config('payments.providers')` in `App\Providers\PaymentServiceProvider` —
+neither manager, nor `PaymentService`, nor `PaymentEventProcessor` ever
+`new`s a concrete provider class or hardcodes a provider name. **Adding a
+second provider is a `config/payments.php` entry plus its two classes —
+nothing in the domain changes.**
 
-`WalletTransactionService::record()`'s own idempotency (see below) is keyed
-by `(external_provider, external_reference)`, i.e. by *PaymentIntent id* —
-it has no way to know two different PaymentIntent ids belong to the same
-Order. Without a separate guard, calling
-`createPaymentIntentForOrder($order)` twice for the same Order (a plain
-repeat call, or two concurrent requests) would create two real Stripe
-PaymentIntents and two independent pending "sale" Wallet transactions for
-one Order — both could later be confirmed, double-crediting the Wallet.
+A provider's own webhook route/controller stays separate per provider
+(`routes/webhooks.php`'s `stripe/webhook` → `StripeWebhookController`
+today), not one generic endpoint — signature verification, payload shape,
+and native vocabulary differ enough between providers that forcing them
+through one endpoint would either make every provider pretend to look like
+Stripe or hide those differences behind conditionals. Each controller does
+its own auth/parsing, then crosses the translation boundary immediately:
+
+```php
+$event = Webhook::constructEvent(...);                 // Stripe-specific
+$outcome = $this->translator->translate($event);        // crosses the boundary
+$this->eventProcessor->apply($outcome);                 // generic from here
+```
+
+## Event -> operation mapping
+
+| Native event (Stripe today) | Generic type | Wallet operation | Notes |
+|---|---|---|---|
+| `payment_intent.succeeded` | `Succeeded` | `confirm()` | No-ops (via caught `TransactionNotPendingException`) if the transaction is already `completed`. If no local transaction exists yet, queued instead of dropped — see the inbox section below. |
+| `payment_intent.payment_failed` | `Informational` | **none** | A single payment *attempt* failing doesn't kill the attempt's remote payment — most providers let the customer retry with a different payment method on the same reference, which can still end in `Succeeded`. Never queued for replay (I10). |
+| `payment_intent.canceled` | `Failed` | `markFailed()` | Fires as its own, separate event when the remote payment is actually done. This — not the attempt-level failure above — is what terminally fails the PaymentAttempt. Same no-op safety for duplicate deliveries. |
+| `charge.refunded` | `Refunded` | `reverse()` | No-ops (via caught `TransactionAlreadyReversedException`) on duplicate delivery. **Only reconciles a fully-refunded charge** — see the limitation above. Queued instead of dropped if no local transaction exists yet, **or** if one exists but isn't `completed` yet (a refund can never reverse a non-completed sale). |
+| anything else | `Unrecognized` | none | Logged and ignored — never queued for replay. |
+
+Both places that convert a Wallet decimal amount into a provider's
+minor-unit integer (`record()`'s amount, and the refund comparison) go
+through `App\Domain\Payments\MinorUnits::fromDecimal()` — a domain concern
+now, not a Stripe one (it was `App\Payments\Stripe\StripeAmount` before
+this refactor; the conversion itself has nothing to do with Stripe, every
+provider this domain talks to takes integer minor units).
+
+## One remote payment per attempt, one attempt claimed at a time
+
+`WalletTransactionService::record()`'s own idempotency is keyed by
+`(external_provider, external_reference)` — it has no way to know two
+different references belong to the same PaymentAttempt. Without a separate
+guard, calling `PaymentService::startAttempt()` twice for the same
+in-flight attempt (a plain repeat call, or two concurrent requests) could
+create two real remote payments and two independent pending "sale" Wallet
+transactions — both could later be confirmed, double-crediting the Wallet.
 
 Two mechanisms close this, at different layers:
 
-- **Stripe-side:** the PaymentIntent is created with a deterministic
-  `idempotency_key` derived from the Order id
-  (`order-{$order->id}-payment-intent`). Two calls with the same key and the
-  same params (always true here — the params are only ever derived from the
-  Order's own persisted `amount`/`currency`) return the same PaymentIntent
-  object rather than creating a second one.
-- **Local:** `order_payment_intents` has a unique constraint on `order_id`
-  (and on `payment_intent_id`, so the 1:1 relationship holds in both
-  directions). `createPaymentIntentForOrder()` writes the
-  `(order_id, payment_intent_id)` claim row and calls `record()` inside the
-  same `DB::transaction()`. This is the layer that actually decides whether
-  a second Wallet transaction gets created — it holds even in the
-  hypothetical case where the Stripe-side idempotency key doesn't (e.g. a
-  bug in how it's sent), which is why it isn't treated as redundant with the
-  key above.
+- **Provider-side:** the remote payment is requested with a deterministic,
+  attempt-scoped `idempotency_key` (`payment-{payment_id}-attempt-{attempt_id}`
+  for Stripe). Two calls under the same key and the same params return the
+  same remote payment rather than creating a second one.
+- **Local:** `payment_attempts` has a unique constraint on `(provider, provider_reference)`
+  — the layer that actually decides whether a second Wallet transaction
+  gets created, holding even in the hypothetical case where the
+  provider-side idempotency key doesn't (e.g. a bug in how it's sent).
+  Persistence is a conditional `UPDATE payment_attempts SET provider_reference
+  = ? WHERE id = ? AND provider_reference IS NULL` — if two processes are
+  finalizing the *same* attempt row concurrently (e.g. a reconciliation
+  lease expired and got reclaimed while the original worker was still
+  mid-call), only one `UPDATE` can win. The loser reads back whichever
+  reference actually got persisted and, if it differs from its own result,
+  fetches and validates *that* one (via `SupportsCanonicalRetrieval`)
+  before ever trusting it — the database's row, not either caller's own
+  provider response, is the source of truth for which reference an attempt
+  claimed. A provider without a "retrieve by reference" capability fails
+  closed instead (`PaymentAttemptMismatchException`) rather than trusting
+  an unvalidated reference.
 
-The claim row, not whatever a given call's own Stripe response happens to
-be, is the source of truth for which PaymentIntent an Order actually has a
-Wallet transaction for. On a duplicate-key violation (this call lost the
-race, or it's a plain repeat call), `createPaymentIntentForOrder()` reads
-the already-claimed `payment_intent_id` back and, only if it differs from
-this call's own PaymentIntent id, fetches that one from Stripe instead —
-so the method never hands back a PaymentIntent the Wallet has no record of,
-even in the (practically unreachable, given the idempotency key) case where
-Stripe assigned two different ids for the same Order.
-
-That recovery query runs **after** `DB::transaction()` has returned control
-via a caught `QueryException`, never inside a `catch` nested in the
-transaction closure. `DB::transaction()` always calls `rollBack()` before
-rethrowing (`Illuminate\Database\Concerns\ManagesTransactions`), so by the
-time the recovery query runs, the transaction is already closed on any
-engine — including ones (PostgreSQL) that refuse to run further statements
-in a transaction that already failed one, unlike MySQL/SQLite, which
-tolerate it. This also means the recovery path doesn't need to match a
-specific SQLSTATE for "unique violation" (MySQL and SQLite both report
-`23000`; PostgreSQL reports the more specific `23505`) — it only asks
-whether a claim exists for this Order, which is true regardless of engine.
-
-Wrapping the claim-row insert and `record()` in one transaction also means a
-`record()` failure rolls the claim row back too, instead of permanently
-locking the Order out of a working retry — a later call just hits Stripe
-again (same idempotency key, same PaymentIntent) and tries once more.
+Wrapping the persistence step and `record()` in one transaction also means
+a `record()` failure rolls the claim back too, instead of permanently
+locking the attempt out of a working retry — a later call just calls the
+provider again (same idempotency key, same remote payment) and tries once
+more.
 
 ## The idempotency reference
 
-The initial Stripe-originated Wallet transaction is anchored by a
-`WalletTransactionReference('stripe', <id>)` — `confirm()` and `markFailed()`
-don't take a new reference themselves, they operate on the transaction that
-reference already identified:
+The initial provider-originated Wallet transaction is anchored by a
+`WalletTransactionReference($provider, $providerReference)` — `confirm()`
+and `markFailed()` don't take a new reference themselves, they operate on
+the transaction that reference already identified:
 
-- The initial `record()` call uses the **PaymentIntent id** — this is what
-  ties every later webhook back to the same transaction.
-- `reverse()` uses the **Charge id** (`$charge->id`) — a different reference
-  than the original, since it identifies the reversal transaction itself,
-  not the original sale. Stripe's separate refund object id is never used
-  here.
+- The initial `record()` call uses the **payment's own reference**
+  (Stripe's PaymentIntent id) — this is what ties every later webhook back
+  to the same transaction.
+- `reverse()` uses the **refund's own reference** (Stripe's Charge id) — a
+  different reference than the original, since it identifies the reversal
+  transaction itself, not the original sale.
 
 ## Linking back to application data without the Wallet knowing about it
 
-The Wallet's `referenceable` morph column (already used for e.g. linking a
-transaction to a `Store`) is reused to link a sale transaction to whatever
-business record justified it — currently a minimal `Order` model. Given
-that link, `StripeEventDispatcher` never needs to trust or parse
-`metadata` coming back from Stripe: it looks up the transaction by
-`(external_provider, external_reference)`, then reads `$transaction->referenceable`
-to find the `Order` to update. Metadata is still sent to Stripe (useful for
-the Stripe Dashboard and manual debugging) but the dispatcher's own
-correctness never depends on it.
+The Wallet's `referenceable` morph column links a sale transaction to
+whatever business record justified it — currently a minimal `Order` model.
+Given that link, `PaymentEventProcessor` never needs to trust or parse
+metadata coming back from a provider: it looks up the transaction by
+`(external_provider, external_reference)`, then reads
+`$transaction->referenceable` to find the `Order` to update.
+`ProviderPaymentResult::$correlationId` (Stripe's `metadata.order_id`,
+mapped generically) is still validated at claim time — see
+[A recovered payment is checked against the Attempt before it's ever claimed](#a-recovered-payment-is-checked-against-the-attempt-before-its-ever-claimed)
+— but the event processor's own correctness never depends on trusting it a
+second time.
 
-The lookup (`external_provider`, `external_reference`) is further scoped to
-`whereNull('related_transaction_id')`, i.e. it only ever matches an original
-sale transaction, never a reversal. This assumes one PaymentIntent maps to
-exactly one original transaction — true today because `record()` is called
-once per PaymentIntent in `StripePaymentService::createPaymentIntentForOrder()`,
-and structurally enforced by the `external_ref_idx` unique index on
-`(external_provider, external_reference)` in the `store_wallet_transactions`
-table: two "sale" rows can never share the same `(stripe, <PaymentIntent id>)`
-pair, so `findOriginalTransactionByPaymentIntentId()`'s `->first()` can never
-silently pick one of several matches. A second adapter must preserve this
-1:1 mapping, or `findOriginalTransactionByPaymentIntentId` needs to be
-revisited.
+The lookup is further scoped to `whereNull('related_transaction_id')`, i.e.
+it only ever matches an original sale transaction, never a reversal. This
+assumes one provider reference maps to exactly one original transaction —
+structurally enforced by the `external_ref_idx` unique index on
+`(external_provider, external_reference)` in `store_wallet_transactions`.
+A new provider adapter must preserve this 1:1 mapping.
 
 ## Retries and replays
 
 A provider integration must be safe to re-invoke with the same event
 without side effects beyond the first call — including on the application
-side, not just the Wallet. This is why every dispatcher handler wraps its
-Wallet call in a catch for the specific "already in that state" exception
-**and returns immediately** rather than falling through to `markOrder()`:
-the check and the mutation happen atomically inside
+side, not just the Wallet. Every event-processor handler wraps its Wallet
+call in a catch for the specific "already in that state" exception **and
+returns immediately** rather than falling through to updating Order/Payment
+status: the check and the mutation happen atomically inside
 `WalletTransactionService`, so there is no read-then-write race between two
 concurrent webhook deliveries, and a no-op Wallet call must also mean a
-no-op `Order::update()` (no timestamp bump, no re-fired model events).
+no-op status update (no timestamp bump, no re-fired model events).
 
-The Wallet mutation and `markOrder()` are wrapped together in one
-`DB::transaction()` per handler (they're on the same connection, so this is
-possible, unlike the Stripe-API case below). This closes what used to be a
-known gap: without it, a `markOrder()` failure *after* a successful
-`confirm()`/`markFailed()`/`reverse()` would leave the Wallet transaction
-settled with the Order stuck out of sync, and a replayed webhook could never
-repair it — the Wallet call would just hit its "already in that state"
-exception and return before ever reaching `markOrder()` again. With the
-wrap, that failure rolls back the Wallet mutation too, so the transaction
-stays `pending`/reversible and a later retry (of the same event, or the
-underlying process) can still succeed cleanly
-(`StripeWebhookControllerTest`: *"rolls back the Wallet confirmation when
-marking the order paid fails, keeping the pair atomic"*).
-`WalletTransactionService`'s own methods open their own `DB::transaction()`
-internally; nesting inside this outer one is safe and just uses a
-savepoint.
+The Wallet mutation and the Order/Payment/PaymentAttempt status update are
+wrapped together in one `DB::transaction()` per handler. Without this, a
+status-update failure *after* a successful `confirm()`/`markFailed()`/`reverse()`
+would leave the Wallet transaction settled with the Order stuck out of
+sync, and a replayed webhook could never repair it. With the wrap, that
+failure rolls back the Wallet mutation too, so the transaction stays
+`pending`/reversible and a later retry can still succeed cleanly.
 
-## External non-atomicity: Stripe + the database
+## Transaction boundaries
 
-`StripePaymentService::createPaymentIntentForOrder()` calls the Stripe API
-and then writes to the database; these cannot be one atomic operation
-because Stripe's HTTP API is outside our database transaction. If the
-PaymentIntent is created on Stripe but the following `record()` call fails
-(or the process dies in between), Stripe has a PaymentIntent with no local
-Wallet transaction pointing at it, and no webhook will ever resolve it,
-since the dispatcher only acts on transactions it can already find by
-reference. This integration accepts that gap rather than pretending a DB
-transaction could close it — see `App\Console\Commands\CreateTestStripeOrder`
-for the same tradeoff made explicit in a real caller (it deletes its local
-Order on failure but says so plainly: Stripe's side may still need manual
-cleanup). What it doesn't accept is leaving that gap permanently
-unreconciled — see the next section.
+`PaymentService::startAttempt()` calls a remote provider API and writes to
+the database; these are never one atomic operation because a provider's
+HTTP API is outside this application's database transaction. The design
+accepts that gap rather than pretending a DB transaction could close it,
+and instead makes it *bounded and automatically recovered*:
 
-## Recovering orphaned PaymentIntents: the `order_payment_intent_attempts` outbox
+```
+lock Payment row
+   |
+create durable PaymentAttempt row (pending)
+   |
+release lock                              <-- never held across the remote call
+   |
+call the provider                          <-- CRASH HERE: pending attempt, no reference
+   |
+conditional UPDATE: claim provider_reference + record() the pending Wallet transaction
+   |
+   +-- CRASH HERE: attempt pending, no reference — same as above, recovered the same way
+   |
+replay any queued payment_provider_events for this reference
+```
 
-A DB transaction can't make the Stripe call and the local write atomic, but
-it can make the *fact that Stripe was called* durable, independently of
-whether the rest of the operation succeeds. That's what
-`order_payment_intent_attempts` is: a row written in its own fast commit,
-*before* `createPaymentIntentForOrder()` calls Stripe, carrying the Order id
-and the deterministic idempotency key. This is a standard outbox pattern,
-scoped to exactly the one gap described above.
+Every crash window in this sequence resolves to the same recoverable
+state: a `payment_attempts` row that's `pending` with no `provider_reference`.
+`ReconcileOrphanedPaymentAttempts` finds it and calls the provider again
+under the same idempotency key — see the next section.
 
-The row starts `pending` and is flipped to `claimed` inside the same
-transaction that writes the `order_payment_intents` claim and calls
-`record()` — so a `pending` row still lingering after that transaction
-either committed or rolled back means precisely one thing: Stripe was asked
-for a PaymentIntent, and this process never found out (or never got the
-chance to record) what happened next.
+## Recovering orphaned payment attempts: the `payment_attempts` outbox
 
-`App\Console\Commands\ReconcileOrphanedPaymentIntents` finds `pending`
+A DB transaction can't make the provider call and the local write atomic,
+but it can make the *fact that the provider was called* durable,
+independently of whether the rest of the operation succeeds. That's what
+the attempt row already is: written in its own fast commit *before*
+`startAttempt()` ever calls the provider, carrying the Payment id, the
+provider/method, and the deterministic idempotency key. Standard outbox
+pattern, scoped to exactly this one gap.
+
+`App\Console\Commands\ReconcileOrphanedPaymentAttempts` finds `pending`
 attempts older than `--stale-after` minutes (default 5, scheduled every 5
-minutes in `routes/console.php`) and recovers each by calling
-`createPaymentIntentForOrder()` again — nothing more specialized than that.
-Because the idempotency key is deterministic and the params it's built from
-never change after the Order is created, Stripe either returns the original
-PaymentIntent (the common case: it already existed) or, if the original
-request never actually reached Stripe, creates it now — both are the
-correct outcome of finally completing the original attempt. The existing
-claim logic in `createPaymentIntentForOrder()` (unique `order_id` on
-`order_payment_intents`) already makes repeat calls safe, so reconciliation
-adds no new duplication risk.
+minutes in `routes/console.php`) whose reconciliation lease isn't currently
+held (see below) and recovers each by calling
+`PaymentService::finalizeAttempt()` again — nothing more specialized than
+that. Because the idempotency key is deterministic, the provider either
+returns the original remote payment (the common case) or, if the original
+request never actually reached it, creates it now — both are the correct
+outcome of finally completing the original attempt.
+
+The same command also sweeps a second, independent candidate set every run
+— any attempt with an established claim (`provider_reference` not null:
+`claimed`, `succeeded`, *or* `failed`, deliberately not narrowed to
+`claimed`) that still has a `pending` `payment_provider_events` row for
+that same reference — covering the narrower crash window between a claim
+or settlement committing and its event replay running; see
+[When replay runs](#when-replay-runs) below. Unlike the `pending` sweep
+above, this one never touches the attempt's `status` or lease, whatever it
+currently is: the claim/settlement is a consumed fact, not something to
+retry — only the event replay is.
 
 **Recovery only ever rebuilds pending local state — it never settles a
-payment.** `createPaymentIntentForOrder()` only ever calls `record()` with
-`status: pending`; it never calls `confirm()`. Turning a `pending` Wallet
-transaction into `completed` (and the Order into `paid`) stays the
-exclusive job of `StripeEventDispatcher::handlePaymentIntentSucceeded()`,
-triggered only by Stripe's own webhook telling us the PaymentIntent
-actually succeeded. The reconciliation job answers "does this Order's
-payment attempt have a local representation yet?", never "did this payment
-succeed?" — those are deliberately different questions, and only Stripe's
-webhook is allowed to answer the second one.
+payment.** `finalizeAttempt()` only ever calls `record()` with `status:
+pending`; it never calls `confirm()`. Turning a `pending` Wallet
+transaction into `completed` stays the exclusive job of
+`PaymentEventProcessor::applySucceeded()`, triggered only by a provider's
+own webhook. Reconciliation answers "does this attempt have a local
+representation yet?", never "did this payment succeed?" — only a
+provider's webhook is allowed to answer the second one.
 
-On repeated failure (Stripe still unreachable, or failing for some other
-reason), the command tracks `recovery_attempts` and `last_recovery_error`
-on the attempt row and, after `--max-attempts` (default 5), marks it
-`needs_attention` and stops retrying it automatically — logged via
-`Log::error` with the Order id and idempotency key, for whatever alerting
-is wired to the log channel. A `needs_attention` attempt is excluded from
-future runs; picking it back up (e.g. after a manual check that nothing
-harmful happened on Stripe's side) requires deliberately resetting its
-`status` back to `pending`.
+**State diagram** (`App\Domain\Payments\Enums\PaymentAttemptStatus`):
 
-**`--max-age` bounds retries by absolute time, independently of
-`--max-attempts`.** Every retry re-issues the same request under the same
-deterministic idempotency key, which only guarantees Stripe returns the
-original PaymentIntent while that key is still recognized — Stripe may
-remove a key after it has been around for at least 24 hours, and reusing
-it afterward risks being processed as a new request instead of returning
-the original PaymentIntent. `--max-age` (default 720 minutes, i.e. 12h —
-comfortably inside that window) is checked *before* the retry logic, per
-attempt, on every run: an attempt older than `--max-age` goes straight to
-`needs_attention`, no Stripe call made, regardless of how many
-`recovery_attempts` it has left. This means raising `--max-attempts` alone
-(e.g. to ride out a longer Stripe outage) can never, by itself, push a
-retry past the safe recovery window.
+```
+pending
+  |  lease acquired (acquireLease(): UPDATE ... WHERE status = 'pending'
+  |  AND (locked_until IS NULL OR locked_until <= now()))
+  v
+pending (still — the lease, in `locked_until`, is a separate concern
+  |      from lifecycle status; see below)
+  |-- provider call + local claim succeed --> claimed
+  |-- retryable error, retries remain     --> pending (lease released, retried later)
+  |-- non-retryable error                 --> needs_attention (terminal, manual)
+  |-- retries exhausted (--max-attempts)  --> needs_attention (terminal, manual)
+  |-- age exceeds --max-age               --> needs_attention (terminal, manual,
+  |                                            no provider call made)
+  `-- worker dies while leased            --> stays 'pending' until
+                                               `locked_until` passes, then
+                                               acquireLease() matches it again
+
+claimed --(provider webhook: succeeded)--> succeeded
+claimed --(provider webhook: canceled)---> failed
+
+`needs_attention` and `succeeded`/`failed` are terminal for this attempt.
+`failed` alone permits a *new* attempt for the Payment — see
+"One Payment, multiple attempts over time" above.
+```
+
+The reconciliation lease (`payment_attempts.locked_until`) is deliberately
+its own column, not folded into `status` (there is no `recovering` status
+value) — the earlier Stripe-only design used a `recovering` status for
+this, which meant an attempt's payment-lifecycle state and its
+reconciliation-ownership state were entangled in one enum. Splitting them
+means `status` answers "what happened to this attempt" and `locked_until`
+answers "is a worker currently allowed to act on it" — two different
+questions with two different owners.
+
+**Every remote payment this method ever hands back is validated against
+the attempt's Payment first** (see
+[A recovered payment is checked against the Attempt before it's ever claimed](#a-recovered-payment-is-checked-against-the-attempt-before-its-ever-claimed))
+— including the canonical one fetched via `retrieveByReference()` when a
+call loses the finalization race, which is a *different* provider object
+than the one validated earlier in the same call and is never assumed to
+match just because the database says it's the one that won.
+
+**Candidates are streamed, not loaded all at once.** The reconciler walks
+candidates via `chunkById()` (page size: `payments.reconciliation_chunk_size`,
+default 200) instead of `get()`, so its memory footprint doesn't grow with
+the number of orphaned attempts. CLI options are validated up front
+(`--stale-after >= 0`, `--max-attempts >= 1`, `--lease-timeout > 0`,
+`--max-age > --stale-after`) — an invalid combination exits
+`Command::INVALID` before touching the database or a provider.
+
+### A recovered payment is checked against the Attempt before it's ever claimed
+
+`PaymentService::assertResultMatchesAttempt()` compares a
+`ProviderPaymentResult`'s amount, currency, and correlation id against the
+attempt's Payment/Order right after the provider call returns — for both a
+fresh result and a replayed one from the idempotency key — and throws
+`PaymentAttemptMismatchException` on any mismatch, *before* the claim or
+Wallet transaction is ever written. This is what stops a remote payment
+that doesn't actually belong to this attempt's current data from ever
+being recorded as its payment, instead of trusting "the provider gave it
+back, so it must be right."
+
+Being non-retryable, a mismatch sends the attempt straight to
+`needs_attention` for manual review rather than retrying a request that
+would return the exact same mismatched object every time —
+`ReconcileOrphanedPaymentAttempts::isRetryable()` checks
+`PaymentAttemptMismatchException` itself, a domain-level concern, before
+ever delegating to the resolved provider's own `classifyFailure()`.
+
+### `--max-age` bounds retries by absolute time, independently of `--max-attempts`
+
+Every retry re-issues the same request under the same deterministic
+idempotency key, which only guarantees the provider returns the original
+payment while that key is still recognized — providers typically remove a
+key after some retention window, after which reusing it risks being
+processed as a new request instead. `--max-age` (default 720 minutes) is
+checked *before* the retry logic, per attempt, on every run: an attempt
+older than `--max-age` goes straight to `needs_attention`, no provider call
+made, regardless of how many `recovery_attempts` it has left.
+
+### Failure classification is delegated to the provider, never hardcoded
+
+`ReconcileOrphanedPaymentAttempts` imports no provider SDK exception class
+itself. `PaymentProviderContract::classifyFailure(Throwable): FailureClass`
+is asked instead, resolved per attempt through `PaymentProviderManager`.
+`App\Payments\Stripe\StripePaymentProvider::classifyFailure()` is where
+Stripe's own exception hierarchy is known:
+
+- **Retryable** — `RateLimitException`, `ApiConnectionException`, any other
+  `ApiErrorException` with an HTTP status `>= 500`, and anything else
+  unrecognized (including a local/database exception) — that permissive
+  default is deliberate: an exception from `record()` or the DB
+  transaction failing is exactly the crash/timeout window this whole
+  mechanism exists to recover from.
+- **Non-retryable** — `AuthenticationException`, `PermissionException`,
+  `InvalidRequestException`, `CardException`, `IdempotencyException`.
+  `RateLimitException` is checked **before** `InvalidRequestException`, not
+  just alongside it: Stripe's SDK defines
+  `RateLimitException extends InvalidRequestException`, so if the
+  non-retryable arm were checked first, every 429 would match it via that
+  inherited type and never reach retry logic at all.
+
+A different provider's adapter classifies its own exceptions the same way,
+independently — nothing here assumes Stripe's hierarchy.
+
+### Two workers can't both call a provider for the same attempt
+
+Every state change that decides who gets to *act* on a given attempt —
+acquiring its lease, or sending it straight to `needs_attention` for being
+too old — is a single `UPDATE ... WHERE` (see
+`ReconcileOrphanedPaymentAttempts::acquireLease()`/`markNeedsAttention()`),
+re-checking the attempt's eligibility against the database's current row,
+not a possibly-stale copy this process read earlier. Only one of two
+concurrent `UPDATE`s with the same `WHERE status = 'pending' AND (locked_until
+IS NULL OR locked_until <= now())` can ever match a given row — the loser
+sees 0 rows affected and moves on without ever calling the provider for
+that attempt.
+
+The `payment_attempts` `(provider, provider_reference)` unique constraint
+remains a second, independent layer underneath this — see
+[One remote payment per attempt, one attempt claimed at a time](#one-remote-payment-per-attempt-one-attempt-claimed-at-a-time)
+above.
 
 The scheduled entry in `routes/console.php` also applies
 `->withoutOverlapping()->onOneServer()`, so a run that takes longer than
 five minutes (or a deploy across multiple app servers) can't have two
-processes reconciling the same attempts concurrently. This isn't load-
-bearing for correctness — the unique constraints on `order_payment_intents`
-and the deterministic idempotency key already make two concurrent calls to
-`createPaymentIntentForOrder()` for the same Order safe (see [One
-PaymentIntent per Order](#one-paymentintent-per-order)) — but it avoids
-relying on that as the only thing standing between normal operation and
-two processes racing over the same rows.
-
-The duplicate-claim protection itself is enforced at the database engine
-level, not by the scheduler: the unique `order_id` constraint on
-`order_payment_intents` is the authority that decides which of two
-concurrent `createPaymentIntentForOrder()` calls wins, and the losing call
-reads the winner's claim back after its own insert rolls back (see [One
-PaymentIntent per Order](#one-paymentintent-per-order)). This holds
-regardless of whether the two calls came from one worker retrying, two
-schedulers that both slipped past `onOneServer()`, or any other source —
-the constraint doesn't know or care where a call came from.
-`ReconcileOrphanedPaymentIntentsTest`'s *"returns the existing claim, not a
-duplicate, when two sequential recovery calls target the same orphaned
-attempt"* exercises exactly this decision point (two calls contending for
-the same claim, one necessarily losing) but does so with two sequential
-calls on one connection, not two genuinely concurrent ones — the test
-suite runs against SQLite `:memory:` (a separate database per process,
-with no `busy_timeout` configured), which can't host two real OS
-processes writing to the same database, and even a file-based SQLite
-database would only exercise SQLite's whole-database write lock
-(`database is locked`) rather than the row-level unique-constraint
-violation that MySQL/PostgreSQL raise in production. A genuine concurrency
-test for this would need to run against the production database engine
-(e.g. a MySQL service in CI), not SQLite.
+processes reconciling the same attempts concurrently. This isn't
+load-bearing for correctness — the mechanisms above already make two
+concurrent workers safe — but it avoids relying on that as the only thing
+standing between normal operation and two processes racing over the same
+rows. `onOneServer()` requires the cache backend to be shared between
+servers — confirm that's true of the configured cache driver before
+relying on it operationally; correctness itself never depends on it.
 
 **Manually exercising this recovery path end-to-end:**
 `App\Console\Commands\CreateTestStripeOrder` (`app:stripe-test-order`)
 takes a `--simulate-orphan` flag that stops right after Stripe creates the
-PaymentIntent, before the local claim/Wallet transaction would normally be
-written — reproducing this exact gap on demand instead of only being able
-to test the happy path. Its own output prints the commands to then run
-`app:reconcile-orphaned-payment-intents --stale-after=0` and confirm the
-recovered PaymentIntent.
+remote payment, before the local claim/Wallet transaction would normally
+be written — reproducing this exact gap on demand. Its own output prints
+the commands to then run `app:reconcile-orphaned-payment-attempts
+--stale-after=0` and confirm the recovered payment, for both webhook
+orderings (see the next section).
 
-## What a second PSP adapter should confirm before a `PaymentGateway` interface gets extracted
+## Terminal webhooks that arrive before a local claim exists: the `payment_provider_events` inbox
 
-- Whether "create a pending transaction synchronously when the payment
-  attempt starts" still holds, or whether some providers only tell you
-  about a payment after the fact.
-- Whether the event mapping above (succeeded / a non-terminal failed-attempt
-  signal / a terminal-failure signal / refunded) is universal, or whether
-  other providers split these into more or fewer states. Stripe's own
-  attempt-vs-terminal split (`payment_intent.payment_failed` vs.
-  `payment_intent.canceled`) is a good reason not to assume "failed" is a
-  single event for every provider.
-- Whether every provider can supply a stable id suitable as the
-  idempotency reference at the moment the transaction is first recorded.
+Provider webhooks are **at-least-once and give no ordering guarantee**.
+Combined with the crash window above, that used to leave one case
+unhandled (in the original Stripe-only design): a terminal event
+(succeeded, canceled, a fully-refunded charge) arriving for a reference
+that has no local claim yet.
+
+```
+DB attempt
+   |
+provider payment created
+   |
+CRASH
+   |
+terminal webhook may arrive  --> no local transaction to act on
+   |
+unmatched event persisted    --> payment_provider_events (pending)
+   |
+reconciliation
+   |
+claim created
+   |
+unmatched terminal event replayed
+   |
+correct final state (paid / failed / refunded)
+```
+
+Before this existed, the event processor's handlers simply returned when
+no local transaction was found — a documented, tested gap where
+reconciliation would recreate the Wallet transaction as `pending`, and it
+would **stay pending forever**, even though the provider had already told
+us the payment succeeded. That is no longer the final state — proven by
+`tests/Feature/Payments/Stripe/ReconciliationWebhookOrderingTest.php`'s
+full ordering matrix (below).
+
+### The mechanism
+
+`payment_provider_events` is a small, purpose-built inbox — not a general
+event-sourcing store. A row is written when `PaymentEventProcessor` can't
+resolve an event yet:
+
+- `Succeeded` / `Failed`: no local transaction found for the reference at all.
+- `Refunded`: no local transaction found, **or** one exists but isn't
+  `completed` yet (a refund can never reverse a non-completed sale).
+
+`Informational` events (Stripe's `payment_intent.payment_failed`) are never
+queued — not terminal, nothing to replay it toward.
+
+Persistence is idempotent on `(provider, provider_event_id)` — a
+redelivery of the same event before it's resolved is a no-op, not a
+duplicate row. Only an allow-listed, minimal reconstruction of the event is
+stored (each provider's translator decides exactly what — see e.g.
+`StripeEventTranslator::minimalPaymentIntentPayload()`), never the raw
+provider payload, so nothing sensitive (e.g. a PaymentIntent's
+`client_secret`, an API key, unrelated customer data) ends up in the
+database.
+
+### Replay reuses the exact same settlement logic — nothing is duplicated
+
+`PaymentEventProcessor::replayUnmatchedEvents(provider, reference)` loads
+every `pending` row for that pair, in the order they were originally
+received, reconstructs the provider's native event via that provider's own
+`ProviderEventTranslator::reconstructFromReplayPayload()`, translates it
+again, and calls **the same `apply()`** a live webhook goes through. There
+is exactly one place that knows how to turn a provider event into a Wallet
+mutation, whether it's reached live or replayed.
+
+Each handler returns an `EventApplicationOutcome` (`Applied`, `Unresolved`,
+or `Ignored`) instead of `void`. A row is marked `applied` — and never
+replayed again — only when its handler reports `Applied`: settled, or
+permanently a no-op (a duplicate of an already-terminal event; a partial
+refund amount that can never match, since it's a fixed historical value).
+`Unresolved` (e.g. a refund still waiting on `succeeded` to confirm the
+sale) leaves the row `pending` for the next trigger.
+
+### When replay runs
+
+- **`PaymentService::finalizeAttempt()`**, right after a claim is
+  confirmed — fresh or recovered. This is the primary trigger: it fires
+  from a normal first-time claim, and from
+  `ReconcileOrphanedPaymentAttempts` calling this same method, so
+  reconciliation gets replay "for free" without the reconciler needing any
+  awareness of the inbox at all.
+- **`PaymentEventProcessor::applySucceeded()`**, after confirming (or
+  no-op'ing on a duplicate), replays any queued `Refunded` event for the
+  same reference — this is what resolves refund-before-succeeded ordering
+  without a second refund webhook ever arriving.
+- **`ReconcileOrphanedPaymentAttempts`'s second candidate set**, on every
+  scheduled run: any attempt with an established claim
+  (`provider_reference` not null — `claimed`, `succeeded`, or `failed`)
+  that still has a `pending` `payment_provider_events` row for its own
+  `(provider, provider_reference)`. This exists because two different call
+  sites commit a real state change and only *then* replay, as two
+  non-atomic steps (see
+  [Transaction boundaries](#transaction-boundaries)): `finalizeAttempt()`
+  (claim commit, then `replayUnmatchedEvents()`) and
+  `applySucceeded()` (settlement commit, then its own nested `replay()`
+  call for a refund queued ahead of it). If the process dies — or that
+  later call itself throws, e.g. an uncaught exception from a live webhook
+  (`StripeWebhookController` has no `try`/`catch` around `apply()`, so this
+  surfaces as a `500` with no retry of its own beyond whatever the
+  provider's webhook redelivery policy allows) — between the two steps,
+  the attempt already carries its real, correct status (possibly already
+  terminal) but its queued event was never replayed, and neither trigger
+  above ever fires for it again (a provider won't redeliver a webhook it
+  already got a `200` for). Recovering this never reopens the attempt or
+  touches its `status`/lease, whatever that status is — the
+  claim/settlement already happened and isn't retried, only the replay is
+  — it just calls `finalizeAttempt()` again, which for an attempt that
+  already has a `provider_reference` skips the provider call entirely and
+  goes straight to `replayUnmatchedEvents()`. A failure here is left for
+  the *event* row's own `replay_attempts`/`last_replay_error` to surface;
+  the next run's still-`pending` row picks it up again.
+
+All three call sites make replay **unconditional and idempotent by
+construction**: a `pending` row is retried every time any trigger fires;
+an `applied` row is never selected again; and `apply()` itself is already
+required to be safe against duplicate delivery for every event type it
+handles, live or replayed.
+
+**A subtlety that cost a real bug during development:** the nested replay
+call from `applySucceeded()` must exclude `Succeeded`-type events from
+what it re-processes. A row is only marked `applied` *after* `apply()`
+returns for it — while a `Succeeded` row is mid-`apply()`, it's still
+`pending` in the database. An unscoped nested replay would re-select that
+same row, call `apply()` on it again (hitting the harmless
+`TransactionNotPendingException` no-op path), and immediately trigger
+*another* nested replay — forever. Excluding `Succeeded`-type events from
+that one call site is what makes it safe: nothing a `Refunded`-type
+`apply()` does ever triggers a nested replay itself, so it can't re-enter
+this way. See `PaymentEventProcessor::replay()`'s docblock.
+
+### Ordering guarantees this closes
+
+Proven by `ReconciliationWebhookOrderingTest` — every case starts from the
+same orphaned state (a provider has a remote payment, a `pending` attempt
+row, nothing else):
+
+| Case | Order of events | Outcome |
+|---|---|---|
+| A | reconciliation -> succeeded | `paid` |
+| B | succeeded -> reconciliation | `paid` (previously: stuck `pending` forever) |
+| C | succeeded -> duplicate succeeded -> reconciliation | `paid`, exactly once |
+| D | reconciliation -> succeeded -> duplicate succeeded | `paid`, exactly once |
+| E | canceled -> reconciliation | `failed` |
+| F | reconciliation -> canceled | `failed` |
+| G | payment_failed -> reconciliation | stays `pending` (not terminal) |
+| H | payment_failed -> reconciliation -> succeeded | `paid` |
+| I | stored terminal event -> reconciliation -> replay -> repeat replay | exactly-once outcome |
+| J | (claim exists) -> refund -> succeeded | reversed exactly once, automatically, no second refund webhook needed |
+
+No case above may credit or reverse a balance twice, re-touch `updated_at`
+on a duplicate delivery, or leave a payment a provider has already told us
+is terminal stuck `pending` indefinitely.
+
+### Known limitations
+
+- **Not a general retry/outbox framework.** It only stores the terminal
+  event types above, keyed by `(provider, reference)`, and is only ever
+  replayed by the two triggers listed. Don't extend it to other event
+  types without reconsidering whether this is still the right shape.
+- **No pruning.** See
+  [Known production limitations](#known-production-limitations--read-before-building-on-top-of-this).
+- **Operationally**, an attempt stuck at `needs_attention` can also have
+  `pending` rows in `payment_provider_events` — worth checking alongside
+  the attempt row when investigating one manually.
+
+## Database invariants
+
+- `payments.order_id` — unique. One Payment per Order.
+- `payments.current_payment_attempt_id` — nullable FK into `payment_attempts`;
+  the attempt currently governing the Payment's fate (in flight, or the
+  one that won). Set/cleared only under a row lock — see
+  [One Payment, multiple attempts over time](#one-payment-multiple-attempts-over-time--never-two-live-at-once).
+- `payment_attempts.payment_id` — not unique (many attempts allowed over
+  time); `payments.current_payment_attempt_id` is what actually bounds
+  concurrency, not a constraint on this table.
+- `payment_attempts.(provider, provider_reference)` — unique. Multiple
+  `NULL` references (not-yet-claimed attempts) may coexist; MySQL and
+  PostgreSQL both treat multiple `NULL`s as distinct under a unique index.
+- `payment_attempts.(status, created_at)` and `(status, locked_until)` —
+  composite indexes matching the reconciler's actual candidate query; a
+  plain index on `status` alone would still force a scan to apply the
+  second predicate.
+- `payment_provider_events.(provider, provider_event_id)` — unique.
+  Idempotent persistence regardless of webhook redelivery count.
+- `payment_provider_events.(provider, provider_reference, status)` — index
+  matching the replay query.
+- `store_wallet_transactions.(external_provider, external_reference)` —
+  unique (`external_ref_idx`, pre-existing, unchanged by this refactor).
+  Provider-namespaced from day one, which is what let this refactor add a
+  second provider's transactions to the same table safely.
+
+## What a second provider adapter needs to implement
+
+- `PaymentProviderContract`: `name()`, `createOrGetPayment()`,
+  `classifyFailure()`. `SupportsCanonicalRetrieval::retrieveByReference()`
+  only if the provider's API supports fetching a payment by reference —
+  optional, used only for the finalization-race fallback.
+- `ProviderEventTranslator`: `translate()` and
+  `reconstructFromReplayPayload()`, mapping the provider's own webhook
+  event shape into `ProviderEventOutcome` — confirm whether the provider's
+  event mapping (succeeded / a non-terminal failed-attempt signal / a
+  terminal-failure signal / refunded) is universal, or whether it splits
+  these into more or fewer states than Stripe's four.
+- Its own webhook route + controller (see
+  [Provider vs. domain: who's allowed to know what](#provider-vs-domain-whos-allowed-to-know-what)),
+  doing its own signature verification.
+- A `config/payments.php` entry registering both classes under the new
+  provider's driver name, plus its credentials under their own key in
+  `config/services.php` (never a shared/generic credentials structure).
+- Whether it can supply a stable id, at the moment the transaction is
+  first recorded, suitable as the Wallet idempotency reference — every
+  provider integration needs this regardless of any other design choice.

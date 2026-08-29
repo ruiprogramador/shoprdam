@@ -1,5 +1,7 @@
 <?php
 
+use App\Domain\Payments\Enums\ProviderEventStatus;
+use App\Domain\Payments\Models\PaymentProviderEvent;
 use App\Domain\Wallet\WalletTransactionReference;
 use App\Models\Order;
 use App\Models\OrderStatus;
@@ -12,8 +14,8 @@ beforeEach(function () {
     $this->wallet = $this->store->wallets()->first();
     $this->order = Order::factory()->forStore($this->store)->amount('100.00')->create();
 
-    // What StripePaymentService::createPaymentIntentForOrder does when the
-    // PaymentIntent is created, reproduced here without hitting Stripe's API.
+    // What App\Domain\Payments\Services\PaymentService::startAttempt() does
+    // when the PaymentIntent is created, reproduced here without hitting Stripe's API.
     app(WalletTransactionService::class)->record(
         wallet: $this->wallet,
         categorySlug: 'sale',
@@ -141,7 +143,9 @@ it('does nothing when payment_intent.canceled references an unknown payment inte
     expect(StoreWalletTransaction::where('external_reference', 'pi_test_123')->firstOrFail()->status->slug)
         ->toBe('pending')
         ->and($this->order->fresh()->status->slug)
-        ->toBe('pending');
+        ->toBe('pending')
+        ->and(PaymentProviderEvent::where('provider_reference', 'pi_unknown_reference')->firstOrFail()->status)
+        ->toBe(ProviderEventStatus::Pending);
 });
 
 it('never touches the Wallet or the Order on payment_intent.payment_failed, regardless of the embedded status', function (string $paymentIntentStatus) {
@@ -301,7 +305,12 @@ it('does nothing when charge.refunded arrives before the payment intent has been
         ->and(StoreWalletTransaction::where('external_reference', 'pi_test_123')->firstOrFail()->status->slug)
         ->toBe('pending')
         ->and($this->order->fresh()->status->slug)
-        ->toBe('pending');
+        ->toBe('pending')
+        // Not lost: queued so it can be replayed once the sale confirms —
+        // see App\Domain\Payments\Services\PaymentEventProcessor::replayUnmatchedEvents()
+        // and ReconciliationWebhookOrderingTest ("J").
+        ->and(PaymentProviderEvent::where('provider_reference', 'pi_test_123')->firstOrFail()->status)
+        ->toBe(ProviderEventStatus::Pending);
 });
 
 it('does nothing when charge.refunded arrives for a transaction that was already marked failed', function () {
@@ -327,7 +336,9 @@ it('does nothing when charge.refunded references a PaymentIntent id with no matc
     expect($this->wallet->fresh()->balance)
         ->toBe('0.00')
         ->and($this->wallet->transactions()->count())
-        ->toBe(1);
+        ->toBe(1)
+        ->and(PaymentProviderEvent::where('provider_reference', 'pi_completely_unknown')->firstOrFail()->status)
+        ->toBe(ProviderEventStatus::Pending);
 });
 
 it('does nothing when the payment intent reference is unknown', function () {
@@ -338,7 +349,9 @@ it('does nothing when the payment intent reference is unknown', function () {
     expect($this->wallet->fresh()->balance)
         ->toBe('0.00')
         ->and($this->order->fresh()->status->slug)
-        ->toBe('pending');
+        ->toBe('pending')
+        ->and(PaymentProviderEvent::where('provider_reference', 'pi_unknown_reference')->firstOrFail()->status)
+        ->toBe(ProviderEventStatus::Pending);
 });
 
 it('accepts payment_intent.payment_failed for an unknown payment intent without error', function () {

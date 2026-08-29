@@ -28,9 +28,11 @@ Confirmed against a real consumer (the Stripe integration — see
   (for its reversal) both satisfy this — they're stable identifiers issued
   once by Stripe, not something the integration invents per attempt.
 - Tolerance for at-least-once delivery: a webhook handler must be safe to
-  run twice for the same event. `StripeEventDispatcher` achieves this by
-  catching the specific "already in that state" exception from the Wallet
-  operation it calls (`TransactionNotPendingException` for
+  run twice for the same event. `App\Domain\Payments\Services\PaymentEventProcessor`
+  achieves this by catching the specific "already in that state" exception
+  from the Wallet operation it calls (`TransactionNotPendingException` for
   `confirm()`/`markFailed()`, `TransactionAlreadyReversedException` for
   `reverse()`) and treating it as a no-op — never by checking status
   beforehand, which would race against a concurrent duplicate delivery.
+  See `docs/wallet/integrations.md` for how this generalizes across
+  payment providers, not just Stripe.

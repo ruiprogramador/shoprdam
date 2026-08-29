@@ -53,8 +53,11 @@ always use the returned value, or reload explicitly.
 
 ## Real-world exercise
 
-`App\Payments\Stripe\StripeEventDispatcher` calls all four operations from
-webhook handlers driven by real Stripe event shapes (see
+`App\Domain\Payments\Services\PaymentEventProcessor` calls all four
+operations from provider-neutral event outcomes translated by each
+provider's own adapter (e.g. `App\Payments\Stripe\StripeEventTranslator`,
+driven by real Stripe event shapes — see
 `tests/Feature/Payments/Stripe/StripeWebhookControllerTest.php`). This is
 the first consumer that exercises the contract above outside of the
-Wallet's own test suite.
+Wallet's own test suite. See `docs/wallet/integrations.md` for the full
+payments domain architecture.
