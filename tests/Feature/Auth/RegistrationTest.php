@@ -7,11 +7,14 @@ test('registration screen can be rendered', function () {
 });
 
 test('new users can register', function () {
+    $userType = \App\Models\UserType::where('name', 'User')->firstOrFail()->id;
+
     $response = $this->post('/register', [
         'name' => 'Test User',
         'email' => 'test@example.com',
         'password' => 'password',
         'password_confirmation' => 'password',
+        'user_type' => $userType,
     ]);
 
     $this->assertAuthenticated();

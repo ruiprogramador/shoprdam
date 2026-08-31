@@ -2,6 +2,7 @@
 
 namespace Database\Factories;
 
+use App\Models\UserType;
 use Illuminate\Database\Eloquent\Factories\Factory;
 use Illuminate\Support\Facades\Hash;
 use Illuminate\Support\Str;
@@ -29,6 +30,13 @@ class UserFactory extends Factory
             'email_verified_at' => now(),
             'password' => static::$password ??= Hash::make('password'),
             'remember_token' => Str::random(10),
+            // Registration always sets this explicitly (see RegisteredUserController);
+            // set it here too so factory-created users behave the same in-memory as a
+            // real request-created one, instead of silently relying on the DB column
+            // default that Eloquent never reads back after an insert. firstOrFail (not
+            // ->value()) so a missing/unmigrated user_types lookup fails loudly here
+            // instead of surfacing as an opaque NOT NULL constraint violation.
+            'user_type_id' => UserType::where('name', 'User')->firstOrFail()->id,
         ];
     }
 
