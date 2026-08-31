@@ -57,9 +57,16 @@ return [
     | why. Kept generous by default since this table stays small in steady
     | state and nothing operationally depends on pruning happening promptly.
     |
+    | Deliberately not `(int) env(...)` here: an `(int)` cast silently turns
+    | a malformed env value (e.g. a typo'd 'PAYMENTS_PROVIDER_EVENT_RETENTION_DAYS=abc')
+    | into `0`, which would make the pruning command aggressively delete
+    | every currently-eligible Applied row instead of refusing to run.
+    | PrunePaymentProviderEvents validates this raw value itself (strict
+    | integer parsing, fails closed) rather than trusting an early cast.
+    |
     */
 
-    'provider_event_retention_days' => (int) env('PAYMENTS_PROVIDER_EVENT_RETENTION_DAYS', 90),
+    'provider_event_retention_days' => env('PAYMENTS_PROVIDER_EVENT_RETENTION_DAYS', 90),
 
     /*
     |--------------------------------------------------------------------------

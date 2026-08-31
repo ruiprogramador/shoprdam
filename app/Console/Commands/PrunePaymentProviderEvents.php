@@ -46,13 +46,9 @@ class PrunePaymentProviderEvents extends Command
 
     public function handle(): int
     {
-        $days = $this->option('days') !== null
-            ? (int) $this->option('days')
-            : (int) config('payments.provider_event_retention_days', 90);
+        $days = $this->resolveRetentionDays();
 
-        if ($days < 0) {
-            $this->error('--days must be >= 0.');
-
+        if ($days === null) {
             return self::INVALID;
         }
 
@@ -79,5 +75,61 @@ class PrunePaymentProviderEvents extends Command
         $this->info("Pruned {$totalDeleted} payment_provider_events row(s) applied before {$cutoff->toIso8601String()}.");
 
         return self::SUCCESS;
+    }
+
+    /**
+     * Resolves the retention period from `--days` if given, otherwise from
+     * `payments.provider_event_retention_days` — validated with strict
+     * integer parsing rather than an early `(int)` cast. `(int) 'abc'` is
+     * silently `0`, which would make this command aggressively prune every
+     * currently-eligible Applied row on a typo'd/malformed value instead of
+     * refusing to run — the opposite of the fail-safe behavior a pruning
+     * command needs. An explicitly invalid `--days` is never masked by
+     * falling back to the configured value: `handle()` returns
+     * `self::INVALID` (deleting nothing) the moment either input fails to
+     * parse.
+     *
+     * Zero retention (`--days=0`, or the config set to `0`) is intentionally
+     * still valid — it means "prune anything currently eligible," not "skip
+     * pruning" — consistent with this command's pre-existing behavior; only
+     * the *parsing* is being hardened here, not what a valid value means.
+     */
+    private function resolveRetentionDays(): ?int
+    {
+        $option = $this->option('days');
+
+        if ($option !== null) {
+            return $this->parseNonNegativeInteger($option, '--days');
+        }
+
+        return $this->parseNonNegativeInteger(
+            config('payments.provider_event_retention_days', 90),
+            'payments.provider_event_retention_days',
+        );
+    }
+
+    /**
+     * Accepts only a value that is *exactly* a non-negative integer —
+     * `FILTER_VALIDATE_INT` rejects '', 'abc', and '3.5' outright (returns
+     * `false`, not a truncated/rounded guess); a negative but
+     * otherwise-well-formed integer like '-1' is then rejected by the
+     * explicit `< 0` check below. Never coerces — either the value parses
+     * cleanly as >= 0, or this returns `null` and prints exactly which
+     * source (`--days` or the config key) failed.
+     */
+    private function parseNonNegativeInteger(mixed $value, string $source): ?int
+    {
+        $normalized = is_int($value) ? (string) $value : $value;
+
+        $filtered = is_string($normalized) ? filter_var($normalized, FILTER_VALIDATE_INT) : false;
+
+        if ($filtered === false || $filtered < 0) {
+            $printable = is_scalar($value) ? (string) $value : get_debug_type($value);
+            $this->error("Invalid retention value for {$source}: '{$printable}' is not a non-negative integer.");
+
+            return null;
+        }
+
+        return $filtered;
     }
 }

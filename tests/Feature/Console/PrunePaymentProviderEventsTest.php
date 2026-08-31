@@ -174,7 +174,106 @@ it('reports how many rows were pruned', function () {
 });
 
 it('rejects a negative --days option instead of silently misbehaving', function () {
+    $preserved = providerEvent(['status' => ProviderEventStatus::Applied, 'processed_at' => now()->subDays(120)]);
+
     $exitCode = Artisan::call('app:prune-payment-provider-events', ['--days' => -1]);
 
-    expect($exitCode)->toBe(Illuminate\Console\Command::INVALID);
+    expect($exitCode)->toBe(Illuminate\Console\Command::INVALID)
+        ->and(PaymentProviderEvent::find($preserved->id))
+        ->not->toBeNull();
+});
+
+// --- Retention parsing must fail closed, never coerce via (int), never delete on invalid input ---
+
+it('rejects a non-numeric --days value instead of silently coercing it to zero', function () {
+    // (int) 'abc' === 0 — if this command trusted that cast, --days=abc
+    // would be silently treated as "prune everything currently eligible"
+    // instead of refusing to run.
+    $preserved = providerEvent(['status' => ProviderEventStatus::Applied, 'processed_at' => now()->subDays(120)]);
+
+    $exitCode = Artisan::call('app:prune-payment-provider-events', ['--days' => 'abc']);
+
+    expect($exitCode)->toBe(Illuminate\Console\Command::INVALID)
+        ->and(Artisan::output())->toContain('Invalid retention value for --days')
+        ->and(PaymentProviderEvent::find($preserved->id))->not->toBeNull()
+        ->and(PaymentProviderEvent::count())->toBe(1);
+});
+
+it('rejects a non-integer decimal --days value instead of truncating it', function () {
+    $preserved = providerEvent(['status' => ProviderEventStatus::Applied, 'processed_at' => now()->subDays(120)]);
+
+    $exitCode = Artisan::call('app:prune-payment-provider-events', ['--days' => '3.5']);
+
+    expect($exitCode)->toBe(Illuminate\Console\Command::INVALID)
+        ->and(PaymentProviderEvent::find($preserved->id))->not->toBeNull()
+        ->and(PaymentProviderEvent::count())->toBe(1);
+});
+
+it('rejects an empty --days value instead of coercing it to zero', function () {
+    $preserved = providerEvent(['status' => ProviderEventStatus::Applied, 'processed_at' => now()->subDays(120)]);
+
+    $exitCode = Artisan::call('app:prune-payment-provider-events', ['--days' => '']);
+
+    expect($exitCode)->toBe(Illuminate\Console\Command::INVALID)
+        ->and(PaymentProviderEvent::find($preserved->id))->not->toBeNull()
+        ->and(PaymentProviderEvent::count())->toBe(1);
+});
+
+it('never falls back to the configured retention value when --days was given but is invalid', function () {
+    config(['payments.provider_event_retention_days' => 1]);
+    $preserved = providerEvent(['status' => ProviderEventStatus::Applied, 'processed_at' => now()->subDays(120)]);
+
+    $exitCode = Artisan::call('app:prune-payment-provider-events', ['--days' => 'abc']);
+
+    expect($exitCode)->toBe(Illuminate\Console\Command::INVALID)
+        ->and(PaymentProviderEvent::find($preserved->id))
+        ->not->toBeNull();
+});
+
+it('rejects a malformed configured retention value and deletes nothing, without --days given', function () {
+    config(['payments.provider_event_retention_days' => 'abc']);
+    $preserved = providerEvent(['status' => ProviderEventStatus::Applied, 'processed_at' => now()->subDays(120)]);
+
+    $exitCode = Artisan::call('app:prune-payment-provider-events');
+
+    expect($exitCode)->toBe(Illuminate\Console\Command::INVALID)
+        ->and(Artisan::output())->toContain('payments.provider_event_retention_days')
+        ->and(PaymentProviderEvent::find($preserved->id))
+        ->not->toBeNull();
+});
+
+it('rejects a negative configured retention value and deletes nothing, without --days given', function () {
+    config(['payments.provider_event_retention_days' => '-5']);
+    $preserved = providerEvent(['status' => ProviderEventStatus::Applied, 'processed_at' => now()->subDays(120)]);
+
+    $exitCode = Artisan::call('app:prune-payment-provider-events');
+
+    expect($exitCode)->toBe(Illuminate\Console\Command::INVALID)
+        ->and(PaymentProviderEvent::find($preserved->id))
+        ->not->toBeNull();
+});
+
+it('still resolves a valid string configured retention value correctly (e.g. from env())', function () {
+    config(['payments.provider_event_retention_days' => '30']);
+
+    $old = providerEvent(['status' => ProviderEventStatus::Applied, 'processed_at' => now()->subDays(45)]);
+    $recent = providerEvent(['status' => ProviderEventStatus::Applied, 'processed_at' => now()->subDays(10)]);
+
+    Artisan::call('app:prune-payment-provider-events');
+
+    expect(PaymentProviderEvent::find($old->id))->toBeNull()
+        ->and(PaymentProviderEvent::find($recent->id))->not->toBeNull();
+});
+
+it('accepts --days=0 as a valid, intentional zero-retention value and prunes only currently-eligible rows', function () {
+    $eligibleNow = providerEvent(['status' => ProviderEventStatus::Applied, 'processed_at' => now()->subSecond()]);
+    $pending = providerEvent(['status' => ProviderEventStatus::Pending]);
+    $futureProcessed = providerEvent(['status' => ProviderEventStatus::Applied, 'processed_at' => now()->addDay()]);
+
+    $exitCode = Artisan::call('app:prune-payment-provider-events', ['--days' => 0]);
+
+    expect($exitCode)->toBe(Illuminate\Console\Command::SUCCESS)
+        ->and(PaymentProviderEvent::find($eligibleNow->id))->toBeNull()
+        ->and(PaymentProviderEvent::find($pending->id))->not->toBeNull()
+        ->and(PaymentProviderEvent::find($futureProcessed->id))->not->toBeNull();
 });
