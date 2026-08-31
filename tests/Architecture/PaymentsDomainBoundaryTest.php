@@ -23,7 +23,21 @@ it('never lets App\Domain\Payments import a provider SDK namespace', function ()
 
         $contents = file_get_contents($file->getPathname());
 
-        if (preg_match('/^use\s+Stripe\\\\/m', $contents) || str_contains($contents, '\\Stripe\\')) {
+        // Strip comments so doc-comment prose (e.g. "see App\Payments\Stripe\StripePaymentProvider")
+        // can't be mistaken for real code referencing the Stripe SDK's own `Stripe\` namespace.
+        $code = '';
+        foreach (token_get_all($contents) as $token) {
+            if (is_array($token)) {
+                if (in_array($token[0], [T_COMMENT, T_DOC_COMMENT], true)) {
+                    continue;
+                }
+                $code .= $token[1];
+            } else {
+                $code .= $token;
+            }
+        }
+
+        if (preg_match('/^use\s+Stripe\\\\/m', $code) || str_contains($code, '\\Stripe\\')) {
             $offenders[] = str_replace(base_path().DIRECTORY_SEPARATOR, '', $file->getPathname());
         }
     }

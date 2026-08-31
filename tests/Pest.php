@@ -17,6 +17,25 @@ pest()->extend(Tests\TestCase::class)
 
 /*
 |--------------------------------------------------------------------------
+| Architecture Tests
+|--------------------------------------------------------------------------
+|
+| Architecture tests inspect the filesystem/source tree (e.g. via base_path())
+| and therefore need the Laravel application bootstrapped, but they don't need
+| database access at all. The project's Tests\TestCase always seeds lookup
+| tables in setUp(), which requires a migrated database — a dependency these
+| tests shouldn't have. So bind them to Laravel's own base test case instead,
+| which bootstraps the application (via createApplication()) without any of
+| that database/seeding behavior. This makes each Architecture test bootstrap
+| its own application instance, independent of whatever ran before it.
+|
+*/
+
+pest()->extend(Illuminate\Foundation\Testing\TestCase::class)
+    ->in('Architecture');
+
+/*
+|--------------------------------------------------------------------------
 | Expectations
 |--------------------------------------------------------------------------
 |
