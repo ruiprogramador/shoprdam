@@ -20,6 +20,7 @@ use App\Services\Wallet\WalletService;
 use App\Services\Wallet\WalletTransactionService;
 use Illuminate\Database\QueryException;
 use Illuminate\Support\Facades\DB;
+use Illuminate\Support\Str;
 
 /**
  * Starts, resumes, and finalizes PaymentAttempts against whichever provider
@@ -161,12 +162,18 @@ class PaymentService
                 'payment_id' => $locked->id,
                 'provider' => $provider,
                 'method' => $method,
-                // Placeholder until the attempt has its own id to derive a
-                // deterministic key from — see the forceFill below. Every
-                // retry of *this* attempt reuses the same key; a later,
-                // different attempt (new provider/method after this one
-                // fails) gets its own.
-                'idempotency_key' => '',
+                // Placeholder until the attempt has its own id to derive its
+                // real, deterministic key from — see the forceFill below.
+                // Must be unique per insert, not a shared constant: two
+                // concurrent createDurableAttempt() calls for two different
+                // Payments on the same provider both reach this INSERT
+                // before either's forceFill/save below ever runs, and
+                // payment_attempts.(provider, idempotency_key) is a unique
+                // constraint — a shared placeholder (e.g. '') would make the
+                // second of those two concurrent inserts fail. A random
+                // UUID can't collide with another attempt's placeholder, nor
+                // with any deterministic `payment-{id}-attempt-{id}` key.
+                'idempotency_key' => 'pending-'.Str::uuid(),
                 'status' => PaymentAttemptStatus::Pending,
             ]);
 
