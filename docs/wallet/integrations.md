@@ -199,6 +199,67 @@ now, not a Stripe one (it was `App\Payments\Stripe\StripeAmount` before
 this refactor; the conversion itself has nothing to do with Stripe, every
 provider this domain talks to takes integer minor units).
 
+### Terminal Failed vs. a retryable attempt-level failure
+
+`ProviderEventType::Failed` — and therefore
+`PaymentAttemptStatus::Failed` — must mean **the remote payment this
+attempt represents is irreversibly terminal and can never later settle
+successfully.** This is a load-bearing financial invariant, not a naming
+preference:
+
+```
+PaymentAttemptStatus::Failed::blocksNewAttempt() === false
+```
+
+`Failed` is the *only* status that lets
+`PaymentService::createDurableAttempt()` start a fresh PaymentAttempt for
+the same Payment (a different provider/method) while the old one still
+exists — see
+[One Payment, multiple attempts over time](#one-payment-multiple-attempts-over-time--never-two-live-at-once).
+If a merely retryable, intermediate, or otherwise non-final provider signal
+were translated as `Failed`, a second attempt could be created and go on to
+*also* succeed while the first provider payment was still capable of
+succeeding too — two live charge paths for one Payment, and a double
+Wallet credit if both later settle. Concretely:
+
+```
+Attempt A (provider A) claimed — remote payment still capable of succeeding
+   |
+Attempt A incorrectly marked Failed  <-- must never happen
+   |
+Payment still Pending -> Attempt B (provider B) created
+   |
+Remote payment A later succeeds too -> two live charge paths, double credit
+```
+
+This is why a provider's own `ProviderEventTranslator` — never
+`PaymentEventProcessor`, which just settles whatever type it's handed — is
+the single place responsible for this distinction, for its own native
+vocabulary. For Stripe (`App\Payments\Stripe\StripeEventTranslator`):
+
+- **`payment_intent.payment_failed` → `Informational`, never `Failed`.** A
+  single failed payment *attempt* doesn't kill the PaymentIntent — Stripe
+  lets the customer retry with a different payment method on the same
+  reference, which can still end in `payment_intent.succeeded`. Purely
+  informational: never mutates PaymentAttempt/Payment/Wallet state, never
+  queued for replay.
+- **`payment_intent.canceled` → `Failed`.** Stripe's own irreversible
+  terminal state for a PaymentIntent — once canceled, it cannot transition
+  to `succeeded`. This is the *only* Stripe event this integration ever
+  translates as `ProviderEventType::Failed`, and therefore the only path
+  that can ever produce `PaymentAttemptStatus::Failed` in this codebase.
+
+A future provider adapter must classify its own vocabulary the same way:
+confirm which of its native events represent a genuinely final,
+no-forward-transition state before ever mapping one to `Failed` — an event
+that merely means "this attempt didn't work, but the underlying remote
+payment/session could still resolve later" belongs at `Informational` (or
+another non-terminal outcome appropriate to that provider), never `Failed`.
+Introducing a new `PaymentAttemptStatus`/`ProviderEventType` case is only
+warranted if the existing two-outcome model genuinely cannot represent a
+provider's semantics safely — not as a default response to an awkward
+mapping.
+
 ## One remote payment per attempt, one attempt claimed at a time
 
 `WalletTransactionService::record()`'s own idempotency is keyed by
