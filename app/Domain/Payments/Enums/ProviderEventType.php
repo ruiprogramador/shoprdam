@@ -13,6 +13,31 @@ namespace App\Domain\Payments\Enums;
 enum ProviderEventType
 {
     case Succeeded;
+
+    /**
+     * The remote payment this event references is irreversibly terminal
+     * and can never later settle successfully — never a retryable,
+     * intermediate, or otherwise non-final failure signal. This is a hard
+     * requirement, not a naming preference:
+     * `PaymentEventProcessor::applyFailed()` settles this straight to
+     * `PaymentAttemptStatus::Failed`, and `Failed::blocksNewAttempt()` is
+     * `false` — the one status that lets a new PaymentAttempt be started
+     * for the same Payment while this one still exists (see that case's
+     * own docblock). Translating a merely-retryable/intermediate failure
+     * as `Failed` would let a second attempt start while the first
+     * provider payment could *still* go on to succeed — two live charge
+     * paths for one Payment, and a double Wallet credit if both do.
+     *
+     * A provider's own translator (e.g.
+     * `App\Payments\Stripe\StripeEventTranslator`) owns this distinction
+     * for its own native vocabulary — e.g. Stripe's
+     * `payment_intent.payment_failed` (a single failed *attempt* within a
+     * PaymentIntent that the customer can still retry, which can still end
+     * in `payment_intent.succeeded`) is deliberately `Informational`, not
+     * `Failed`; only `payment_intent.canceled` (Stripe's own irreversible
+     * terminal state for a PaymentIntent) maps here. See "Terminal Failed
+     * vs. a retryable attempt-level failure" in docs/wallet/integrations.md.
+     */
     case Failed;
     case Refunded;
 

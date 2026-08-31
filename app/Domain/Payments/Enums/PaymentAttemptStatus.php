@@ -41,7 +41,35 @@ enum PaymentAttemptStatus: string
     /** Settled: the Wallet transaction is `completed`, the Payment is `paid`. */
     case Succeeded = 'succeeded';
 
-    /** Terminally failed/canceled/expired at the provider. Never retried automatically; a new attempt may follow. */
+    /**
+     * Terminally failed/canceled/expired at the provider. Never retried
+     * automatically; a new attempt may follow.
+     *
+     * `Failed::blocksNewAttempt()` is `false` — this is the one status that
+     * lets `PaymentService::createDurableAttempt()` start a fresh attempt
+     * for the same Payment (a different provider/method) while the old one
+     * still exists. That makes `Failed` a load-bearing financial invariant,
+     * not just a display label: it must mean **the remote payment this
+     * attempt represents is irreversibly terminal and can never later
+     * settle successfully.** If it meant anything weaker — a retryable
+     * provider error, an intermediate/non-final state, a single failed
+     * authorization that the provider itself still lets resolve to success
+     * — then a new attempt could go on to *also* succeed, producing two
+     * live charge paths for the same Payment and a double Wallet credit.
+     *
+     * Nothing in this domain ever sets `Failed` directly for that reason:
+     * it's reached exclusively through
+     * `PaymentEventProcessor::applyFailed()`, itself reached only via
+     * `ProviderEventType::Failed` — see that enum's own docblock, and
+     * "Terminal Failed vs. a retryable attempt-level failure" in
+     * docs/wallet/integrations.md. A provider's own translator (e.g.
+     * `App\Payments\Stripe\StripeEventTranslator`) is the single place
+     * responsible for only ever producing `ProviderEventType::Failed` for a
+     * native event that is *itself* irreversibly terminal at that
+     * provider — never for a retryable/intermediate/non-final failure
+     * signal, which must translate to `Informational` (or another
+     * non-terminal outcome) instead.
+     */
     case Failed = 'failed';
 
     /** Stuck; requires a human to look at it before anything else happens for this Payment. */

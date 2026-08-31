@@ -44,4 +44,42 @@ return [
 
     'reconciliation_chunk_size' => (int) env('PAYMENTS_RECONCILIATION_CHUNK_SIZE', 200),
 
+    /*
+    |--------------------------------------------------------------------------
+    | Provider event retention
+    |--------------------------------------------------------------------------
+    |
+    | How long a terminally `applied` payment_provider_events row (see
+    | App\Domain\Payments\Enums\ProviderEventStatus) is kept, anchored on
+    | `processed_at`, before App\Console\Commands\PrunePaymentProviderEvents
+    | is allowed to delete it. `pending` rows — and any `applied` row with a
+    | null `processed_at` — are never pruned by age; see that command for
+    | why. Kept generous by default since this table stays small in steady
+    | state and nothing operationally depends on pruning happening promptly.
+    |
+    | Deliberately not `(int) env(...)` here: an `(int)` cast silently turns
+    | a malformed env value (e.g. a typo'd 'PAYMENTS_PROVIDER_EVENT_RETENTION_DAYS=abc')
+    | into `0`, which would make the pruning command aggressively delete
+    | every currently-eligible Applied row instead of refusing to run.
+    | PrunePaymentProviderEvents validates this raw value itself (strict
+    | integer parsing, fails closed) rather than trusting an early cast.
+    |
+    */
+
+    'provider_event_retention_days' => env('PAYMENTS_PROVIDER_EVENT_RETENTION_DAYS', 90),
+
+    /*
+    |--------------------------------------------------------------------------
+    | Provider event pruning
+    |--------------------------------------------------------------------------
+    |
+    | How many rows PrunePaymentProviderEvents deletes per DELETE statement,
+    | looping until a batch deletes fewer than this many rows — bounds
+    | per-statement lock/log size instead of one unbounded DELETE across the
+    | whole eligible set.
+    |
+    */
+
+    'provider_event_prune_chunk_size' => (int) env('PAYMENTS_PROVIDER_EVENT_PRUNE_CHUNK_SIZE', 500),
+
 ];

@@ -36,13 +36,15 @@ first:
   [Recovering orphaned payment attempts](#recovering-orphaned-payment-attempts-the-payment_attempts-outbox)
   and
   [Terminal webhooks that arrive before a local claim exists](#terminal-webhooks-that-arrive-before-a-local-claim-exists-the-payment_provider_events-inbox).
-- **`payment_provider_events` is not pruned.** Every terminal event this
-  integration can't resolve immediately is kept indefinitely, `applied`
-  rows included. In steady state this table stays small, but an attempt
-  whose claim is never created (`needs_attention`, never manually
-  resolved) leaves its queued events `pending` forever. Add a
-  retention/prune command before relying on this table for anything beyond
-  the replay it exists for.
+- **`payment_provider_events` retention only ever removes `applied` rows.**
+  `App\Console\Commands\PrunePaymentProviderEvents` (scheduled daily) deletes
+  `applied` rows once `processed_at` is older than
+  `payments.provider_event_retention_days` (default 90) — see
+  [Pruning applied provider events](#pruning-applied-provider-events). A
+  `pending` row is **never** pruned by age, regardless of how old it is:
+  an attempt whose claim is never created (`needs_attention`, never
+  manually resolved) leaves its queued events `pending` indefinitely, and
+  they stay queryable for as long as that's true.
 - **At most one *non-terminal* attempt per Payment at a time** — see
   [One Payment, multiple attempts over time — never two live at once](#one-payment-multiple-attempts-over-time--never-two-live-at-once).
   Concurrent attempts across two providers for the same Payment (e.g. the
@@ -197,6 +199,67 @@ now, not a Stripe one (it was `App\Payments\Stripe\StripeAmount` before
 this refactor; the conversion itself has nothing to do with Stripe, every
 provider this domain talks to takes integer minor units).
 
+### Terminal Failed vs. a retryable attempt-level failure
+
+`ProviderEventType::Failed` — and therefore
+`PaymentAttemptStatus::Failed` — must mean **the remote payment this
+attempt represents is irreversibly terminal and can never later settle
+successfully.** This is a load-bearing financial invariant, not a naming
+preference:
+
+```
+PaymentAttemptStatus::Failed::blocksNewAttempt() === false
+```
+
+`Failed` is the *only* status that lets
+`PaymentService::createDurableAttempt()` start a fresh PaymentAttempt for
+the same Payment (a different provider/method) while the old one still
+exists — see
+[One Payment, multiple attempts over time](#one-payment-multiple-attempts-over-time--never-two-live-at-once).
+If a merely retryable, intermediate, or otherwise non-final provider signal
+were translated as `Failed`, a second attempt could be created and go on to
+*also* succeed while the first provider payment was still capable of
+succeeding too — two live charge paths for one Payment, and a double
+Wallet credit if both later settle. Concretely:
+
+```
+Attempt A (provider A) claimed — remote payment still capable of succeeding
+   |
+Attempt A incorrectly marked Failed  <-- must never happen
+   |
+Payment still Pending -> Attempt B (provider B) created
+   |
+Remote payment A later succeeds too -> two live charge paths, double credit
+```
+
+This is why a provider's own `ProviderEventTranslator` — never
+`PaymentEventProcessor`, which just settles whatever type it's handed — is
+the single place responsible for this distinction, for its own native
+vocabulary. For Stripe (`App\Payments\Stripe\StripeEventTranslator`):
+
+- **`payment_intent.payment_failed` → `Informational`, never `Failed`.** A
+  single failed payment *attempt* doesn't kill the PaymentIntent — Stripe
+  lets the customer retry with a different payment method on the same
+  reference, which can still end in `payment_intent.succeeded`. Purely
+  informational: never mutates PaymentAttempt/Payment/Wallet state, never
+  queued for replay.
+- **`payment_intent.canceled` → `Failed`.** Stripe's own irreversible
+  terminal state for a PaymentIntent — once canceled, it cannot transition
+  to `succeeded`. This is the *only* Stripe event this integration ever
+  translates as `ProviderEventType::Failed`, and therefore the only path
+  that can ever produce `PaymentAttemptStatus::Failed` in this codebase.
+
+A future provider adapter must classify its own vocabulary the same way:
+confirm which of its native events represent a genuinely final,
+no-forward-transition state before ever mapping one to `Failed` — an event
+that merely means "this attempt didn't work, but the underlying remote
+payment/session could still resolve later" belongs at `Informational` (or
+another non-terminal outcome appropriate to that provider), never `Failed`.
+Introducing a new `PaymentAttemptStatus`/`ProviderEventType` case is only
+warranted if the existing two-outcome model genuinely cannot represent a
+provider's semantics safely — not as a default response to an awkward
+mapping.
+
 ## One remote payment per attempt, one attempt claimed at a time
 
 `WalletTransactionService::record()`'s own idempotency is keyed by
@@ -212,7 +275,14 @@ Two mechanisms close this, at different layers:
 - **Provider-side:** the remote payment is requested with a deterministic,
   attempt-scoped `idempotency_key` (`payment-{payment_id}-attempt-{attempt_id}`
   for Stripe). Two calls under the same key and the same params return the
-  same remote payment rather than creating a second one.
+  same remote payment rather than creating a second one. A
+  `UNIQUE(provider, idempotency_key)` database constraint on
+  `payment_attempts` backs this at the DB layer too — provider-scoped, not a
+  bare unique on `idempotency_key` alone, since different providers may
+  legitimately mint keys from the same application-side shape independently
+  of one another (this is a defense-in-depth backstop against a future bug
+  in key generation; the deterministic derivation above already makes an
+  application-level collision practically impossible).
 - **Local:** `payment_attempts` has a unique constraint on `(provider, provider_reference)`
   — the layer that actually decides whether a second Wallet transaction
   gets created, holding even in the hypothetical case where the
@@ -270,6 +340,50 @@ assumes one provider reference maps to exactly one original transaction —
 structurally enforced by the `external_ref_idx` unique index on
 `(external_provider, external_reference)` in `store_wallet_transactions`.
 A new provider adapter must preserve this 1:1 mapping.
+
+## Which PaymentAttempt a settlement event transitions
+
+`(provider, provider_reference)` — the same pair a Wallet transaction is
+looked up by, above — is the **canonical identity of the historical
+PaymentAttempt** a settlement event (`Succeeded`/`Failed`) transitions.
+`PaymentEventProcessor::markSettled()` resolves it with:
+
+```php
+PaymentAttempt::where('payment_id', $payment->id)
+    ->where('provider', $transaction->external_provider)
+    ->where('provider_reference', $transaction->external_reference)
+    ->first();
+```
+
+`Payment.current_payment_attempt_id` is a **different concept and is never
+used for this lookup**: it only ever names whichever attempt is *currently*
+gating new-attempt creation (`PaymentService::createDurableAttempt()`), not
+which attempt historically claimed a given provider reference. Those two
+can diverge — a terminally `failed` attempt is no longer current once a
+retry with another provider/method starts (see
+[One Payment, multiple attempts over time](#one-payment-multiple-attempts-over-time--never-two-live-at-once))
+— and a late/replayed event for the old reference must only ever transition
+*that original attempt*, never whichever attempt happens to be current by
+the time the event is finally processed. Since `payment_attempts.(provider,
+provider_reference)` is unique, this lookup can only ever resolve to the one
+attempt that actually claimed the reference.
+
+This fails closed: if a settlement event needs to transition an attempt and
+no attempt claims the exact reference, `markSettled()` throws
+`PaymentAttemptNotFoundException` rather than silently skipping the
+transition or guessing at a different attempt. Every Wallet transaction
+settled here was itself created from a PaymentAttempt's own claimed
+`provider_reference` (see
+[One remote payment per attempt, one attempt claimed at a time](#one-remote-payment-per-attempt-one-attempt-claimed-at-a-time)),
+so this should be unreachable in practice; the exception is thrown from
+inside the same `DB::transaction()` wrapping the Wallet mutation (see
+[Retries and replays](#retries-and-replays) below), so it rolls that
+mutation back too instead of leaving the Wallet settled with no
+corresponding PaymentAttempt record of it.
+
+A refund (`Refunded`) never invents an attempt transition — `markSettled()`
+is called with `attemptStatus: null` for a refund, same as before this
+hardening; see [Event -> operation mapping](#event---operation-mapping).
 
 ## Retries and replays
 
@@ -667,11 +781,57 @@ is terminal stuck `pending` indefinitely.
   event types above, keyed by `(provider, reference)`, and is only ever
   replayed by the two triggers listed. Don't extend it to other event
   types without reconsidering whether this is still the right shape.
-- **No pruning.** See
-  [Known production limitations](#known-production-limitations--read-before-building-on-top-of-this).
+- **Pruning only ever removes `applied` rows.** See
+  [Pruning applied provider events](#pruning-applied-provider-events) below
+  — a `pending` row is never removed by age.
 - **Operationally**, an attempt stuck at `needs_attention` can also have
   `pending` rows in `payment_provider_events` — worth checking alongside
   the attempt row when investigating one manually.
+
+## Pruning applied provider events
+
+`payment_provider_events` is a replay inbox, not a general audit log: once a
+row's handler has reported `EventApplicationOutcome::Applied` — settled, or
+permanently a no-op — it has no further replay purpose, and in steady state
+these `applied` rows would otherwise accumulate indefinitely.
+`App\Console\Commands\PrunePaymentProviderEvents`
+(`app:prune-payment-provider-events`, scheduled daily in `routes/console.php`
+with `withoutOverlapping()->onOneServer()`) deletes them once they're old
+enough that nobody investigating a recent incident would need them.
+
+**The delete predicate, conceptually:**
+
+```
+status = Applied
+AND processed_at IS NOT NULL
+AND processed_at < now() - retention_days
+```
+
+- **`pending` rows are never pruned, at any age.** A `pending` row still has
+  real recovery work attached to it —
+  `PaymentEventProcessor::replayUnmatchedEvents()` may still need it,
+  possibly indefinitely if its owning attempt is stuck `needs_attention` —
+  regardless of `replay_attempts` or how long it's been sitting there.
+- **The retention anchor is `processed_at`, not `created_at`.** How long ago
+  a row was *resolved* is what determines how long it's still useful for
+  debugging a recent incident — not how long ago it first arrived, which
+  understates relevance for an event that sat `pending` for weeks against a
+  stuck attempt before finally being replayed.
+- **An `applied` row with a null `processed_at` is never eligible either.**
+  This shouldn't happen in practice (`replay()` always sets `processed_at`
+  when marking a row `applied`), but the predicate fails safe — never
+  pruning — rather than guessing at a missing anchor.
+
+Retention is configurable via `payments.provider_event_retention_days`
+(`PAYMENTS_PROVIDER_EVENT_RETENTION_DAYS`, default 90 days) or overridden
+per-run with `--days`. Deletion is a chunked, conditional bulk
+`DELETE ... LIMIT` loop (`payments.provider_event_prune_chunk_size`, default
+500) rather than a loaded-then-deleted collection, mirroring
+`ReconcileOrphanedPaymentAttempts`'s own `chunkById()` rationale — the
+command's memory footprint doesn't grow with the number of eligible rows.
+Safe to run repeatedly (an already-deleted row simply doesn't match a later
+run's predicate again) and safe if two instances overlap (each batch only
+ever matches rows that still satisfy the predicate at the moment it runs).
 
 ## Database invariants
 
@@ -686,6 +846,16 @@ is terminal stuck `pending` indefinitely.
 - `payment_attempts.(provider, provider_reference)` — unique. Multiple
   `NULL` references (not-yet-claimed attempts) may coexist; MySQL and
   PostgreSQL both treat multiple `NULL`s as distinct under a unique index.
+  Also the canonical identity a settlement event resolves the exact
+  historical PaymentAttempt by — see
+  [Which PaymentAttempt a settlement event transitions](#which-paymentattempt-a-settlement-event-transitions).
+- `payment_attempts.(provider, idempotency_key)` — unique. A
+  defense-in-depth DB-layer backstop for the already-deterministic,
+  attempt-scoped idempotency key (see
+  [One remote payment per attempt, one attempt claimed at a time](#one-remote-payment-per-attempt-one-attempt-claimed-at-a-time)).
+  Provider-scoped, not a bare unique on `idempotency_key` — different
+  providers may legitimately reuse the same application-side key shape
+  independently.
 - `payment_attempts.(status, created_at)` and `(status, locked_until)` —
   composite indexes matching the reconciler's actual candidate query; a
   plain index on `status` alone would still force a scan to apply the
@@ -694,6 +864,10 @@ is terminal stuck `pending` indefinitely.
   Idempotent persistence regardless of webhook redelivery count.
 - `payment_provider_events.(provider, provider_reference, status)` — index
   matching the replay query.
+- `payment_provider_events` retention — `applied` rows are pruned once
+  `processed_at` ages past `payments.provider_event_retention_days`; `pending`
+  rows and any row with a null `processed_at` are never pruned by age — see
+  [Pruning applied provider events](#pruning-applied-provider-events).
 - `store_wallet_transactions.(external_provider, external_reference)` —
   unique (`external_ref_idx`, pre-existing, unchanged by this refactor).
   Provider-namespaced from day one, which is what let this refactor add a

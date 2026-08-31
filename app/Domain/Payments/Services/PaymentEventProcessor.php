@@ -8,6 +8,7 @@ use App\Domain\Payments\Enums\PaymentAttemptStatus;
 use App\Domain\Payments\Enums\PaymentStatus;
 use App\Domain\Payments\Enums\ProviderEventStatus;
 use App\Domain\Payments\Enums\ProviderEventType;
+use App\Domain\Payments\Exceptions\PaymentAttemptNotFoundException;
 use App\Domain\Payments\MinorUnits;
 use App\Domain\Payments\Models\Payment;
 use App\Domain\Payments\Models\PaymentAttempt;
@@ -265,7 +266,7 @@ class PaymentEventProcessor
     /**
      * Keeps Order.status (kept for every existing consumer of
      * Order::isPaid()/isFailed()/isRefunded()), Payment.status, and — for
-     * a settlement outcome, not a refund — the current PaymentAttempt's
+     * a settlement outcome, not a refund — the exact PaymentAttempt's
      * status all in sync from the one place that's allowed to change them
      * in response to a provider event.
      *
@@ -274,6 +275,31 @@ class PaymentEventProcessor
      * is it still open for another attempt), never the terminal result of
      * one individual attempt. applyFailed() passes null here for exactly
      * that reason — see its call site.
+     *
+     * The attempt transitioned is resolved by `(payment_id, provider,
+     * provider_reference)` — the same `(external_provider, external_reference)`
+     * pair `$transaction` was looked up by in findTransaction() — never by
+     * `Payment.current_payment_attempt_id`. That pointer only ever names
+     * whichever attempt is *currently* gating new-attempt creation
+     * (PaymentService::createDurableAttempt()); it says nothing about which
+     * attempt historically claimed this event's provider reference. A late
+     * event for an attempt that has since stopped being current (a
+     * terminally failed attempt, superseded by a retry with another
+     * provider/method) must only ever transition *that original attempt* —
+     * never whichever attempt happens to be current by the time the event
+     * is finally processed. Since `payment_attempts.(provider,
+     * provider_reference)` is unique, this lookup can only ever resolve to
+     * the one attempt that actually claimed this reference.
+     *
+     * Fails closed (PaymentAttemptNotFoundException) rather than silently
+     * skipping the transition if no attempt claims this exact reference —
+     * every transaction settled here was itself created from a
+     * PaymentAttempt's own claimed provider_reference, so this should be
+     * unreachable; treating it as a no-op would risk masking a real data
+     * inconsistency. Thrown from inside the DB::transaction() wrapping the
+     * Wallet mutation (see applySucceeded()/applyFailed()), so it rolls
+     * that mutation back too instead of leaving the Wallet settled with no
+     * corresponding PaymentAttempt record of it.
      */
     private function markSettled(
         StoreWalletTransaction $transaction,
@@ -299,9 +325,21 @@ class PaymentEventProcessor
             $payment->update(['status' => $paymentStatus]);
         }
 
-        if ($attemptStatus !== null && $payment->current_payment_attempt_id !== null) {
-            PaymentAttempt::where('id', $payment->current_payment_attempt_id)
-                ->update(['status' => $attemptStatus]);
+        if ($attemptStatus !== null) {
+            $attempt = PaymentAttempt::where('payment_id', $payment->id)
+                ->where('provider', $transaction->external_provider)
+                ->where('provider_reference', $transaction->external_reference)
+                ->first();
+
+            if ($attempt === null) {
+                throw new PaymentAttemptNotFoundException(
+                    "No PaymentAttempt found for Payment #{$payment->id} claiming provider ".
+                    "'{$transaction->external_provider}' reference '{$transaction->external_reference}' — ".
+                    'refusing to settle an attempt transition against unidentified financial history.'
+                );
+            }
+
+            $attempt->update(['status' => $attemptStatus]);
         }
     }
 

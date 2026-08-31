@@ -14,3 +14,7 @@ Schedule::command('app:reconcile-orphaned-payment-attempts')
     ->everyFiveMinutes()
     ->withoutOverlapping()
     ->onOneServer();
+Schedule::command('app:prune-payment-provider-events')
+    ->daily()
+    ->withoutOverlapping()
+    ->onOneServer();
