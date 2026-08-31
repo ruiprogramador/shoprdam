@@ -1,8 +1,15 @@
 <?php
 
+use App\Providers\AppServiceProvider;
+use App\Providers\EventServiceProvider;
+use App\Providers\HorizonServiceProvider;
+use App\Providers\PaymentServiceProvider;
+use App\Providers\TranslationServiceProvider;
+
 return [
-    App\Providers\AppServiceProvider::class,
-    App\Providers\HorizonServiceProvider::class,
-    App\Providers\EventServiceProvider::class,
-    App\Providers\TranslationServiceProvider::class,
+    AppServiceProvider::class,
+    HorizonServiceProvider::class,
+    EventServiceProvider::class,
+    TranslationServiceProvider::class,
+    PaymentServiceProvider::class,
 ];

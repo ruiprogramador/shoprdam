@@ -1,14 +1,23 @@
 <?php
 
+use App\Domain\Payments\Enums\PaymentAttemptStatus;
+use App\Domain\Payments\Models\Payment;
+use App\Domain\Payments\Models\PaymentAttempt;
 use App\Models\Order;
 use App\Models\Store;
 use App\Models\StoreWalletTransaction;
+use Illuminate\Support\Facades\Artisan;
 use Stripe\ApiRequestor;
 use Tests\Fakes\FakeStripeHttpClient;
 
 afterEach(function () {
     ApiRequestor::setHttpClient(null);
 });
+
+function attemptForOrder(Order $order): PaymentAttempt
+{
+    return PaymentAttempt::where('payment_id', Payment::where('order_id', $order->id)->value('id'))->firstOrFail();
+}
 
 it('creates an order and a stripe payment intent for a store', function () {
     $store = Store::factory()->create();
@@ -44,7 +53,119 @@ it('creates an order and a stripe payment intent for a store', function () {
     expect($transaction->referenceable_id)
         ->toBe($order->id)
         ->and($transaction->status->slug)
-        ->toBe('pending');
+        ->toBe('pending')
+        ->and($fakeClient->requests)
+        ->toHaveCount(1)
+        ->and($fakeClient->requests[0]['params']['amount'])
+        ->toBe(2500)
+        ->and($fakeClient->requests[0]['params']['currency'])
+        ->toBe(strtolower($order->currency->code))
+        ->and($fakeClient->requests[0]['params']['metadata']['order_id'])
+        ->toBe((string) $order->id);
+});
+
+it('deletes the test order when the Stripe API call fails', function () {
+    $store = Store::factory()->create();
+
+    $fakeClient = new FakeStripeHttpClient(
+        ['error' => ['type' => 'api_error', 'message' => 'Something went wrong on Stripe.']],
+        500,
+    );
+
+    ApiRequestor::setHttpClient($fakeClient);
+
+    $this->artisan('app:stripe-test-order', [
+        'store_id' => $store->id,
+        'amount' => '25.00',
+    ])
+        ->assertExitCode(1)
+        ->expectsOutputToContain('Failed to create the Stripe payment');
+
+    expect(Order::where('store_id', $store->id)->exists())
+        ->toBeFalse()
+        ->and(StoreWalletTransaction::where('referenceable_type', Order::class)->exists())
+        ->toBeFalse();
+});
+
+it('normalizes the amount to 2 decimals and the matching minor-unit amount to Stripe', function (string $input) {
+    $store = Store::factory()->create();
+
+    $fakeClient = new FakeStripeHttpClient([
+        'id' => 'pi_console_test_norm',
+        'object' => 'payment_intent',
+        'amount' => 1000,
+        'currency' => 'eur',
+        'status' => 'requires_payment_method',
+        'client_secret' => 'pi_console_test_norm_secret',
+        'metadata' => [],
+    ]);
+
+    ApiRequestor::setHttpClient($fakeClient);
+
+    $this->artisan('app:stripe-test-order', [
+        'store_id' => $store->id,
+        'amount' => $input,
+    ])->assertExitCode(0);
+
+    $order = Order::where('store_id', $store->id)->firstOrFail();
+
+    expect($order->amount)
+        ->toBe('10.00')
+        ->and($fakeClient->requests[0]['params']['amount'])
+        ->toBe(1000);
+})->with(['10', '10.0', '10.00']);
+
+it('rejects an amount with more than 2 decimal places', function () {
+    $store = Store::factory()->create();
+
+    $this->artisan('app:stripe-test-order', [
+        'store_id' => $store->id,
+        'amount' => '10.999',
+    ])
+        ->assertExitCode(1)
+        ->expectsOutputToContain('Invalid amount');
+
+    expect(Order::where('store_id', $store->id)->exists())->toBeFalse();
+});
+
+it('rejects a negative amount', function () {
+    $store = Store::factory()->create();
+
+    $this->artisan('app:stripe-test-order', [
+        'store_id' => $store->id,
+        'amount' => '-10.00',
+    ])
+        ->assertExitCode(1)
+        ->expectsOutputToContain('Invalid amount');
+
+    expect(Order::where('store_id', $store->id)->exists())->toBeFalse();
+});
+
+it('rejects a zero amount', function () {
+    $store = Store::factory()->create();
+
+    $this->artisan('app:stripe-test-order', [
+        'store_id' => $store->id,
+        'amount' => '0.00',
+    ])
+        ->assertExitCode(1)
+        ->expectsOutputToContain('Invalid amount');
+
+    expect(Order::where('store_id', $store->id)->exists())->toBeFalse();
+});
+
+it('fails gracefully when the store has no wallet', function () {
+    $store = Store::factory()->create();
+    $store->wallets()->delete();
+
+    $this->artisan('app:stripe-test-order', [
+        'store_id' => $store->id,
+        'amount' => '25.00',
+    ])
+        ->assertExitCode(1)
+        ->expectsOutputToContain('has no wallet');
+
+    expect(Order::where('store_id', $store->id)->exists())->toBeFalse();
 });
 
 it('fails gracefully when the store does not exist', function () {
@@ -62,4 +183,109 @@ it('refuses to run in production', function () {
         ->assertExitCode(1);
 
     app()['env'] = 'testing';
+});
+
+it('refuses to run when the configured Stripe secret is not a test-mode key, without calling Stripe', function () {
+    config(['services.stripe.secret' => 'sk_live_dummy']);
+
+    $fakeClient = new FakeStripeHttpClient(['id' => 'pi_should_not_be_created']);
+    ApiRequestor::setHttpClient($fakeClient);
+
+    $store = Store::factory()->create();
+
+    $this->artisan('app:stripe-test-order', ['store_id' => $store->id])
+        ->assertExitCode(1)
+        ->expectsOutputToContain('test-mode credentials');
+
+    expect($fakeClient->requests)->toBeEmpty();
+});
+
+it('refuses to run when no Stripe secret is configured', function () {
+    config(['services.stripe.secret' => null]);
+
+    $store = Store::factory()->create();
+
+    $this->artisan('app:stripe-test-order', ['store_id' => $store->id])
+        ->assertExitCode(1)
+        ->expectsOutputToContain('test-mode credentials');
+});
+
+it('with --simulate-orphan, stops before the local claim/Wallet transaction and prints recovery instructions', function () {
+    $store = Store::factory()->create();
+
+    $fakeClient = new FakeStripeHttpClient([
+        'id' => 'pi_console_orphan',
+        'object' => 'payment_intent',
+        'amount' => 2500,
+        'currency' => 'eur',
+        'status' => 'requires_payment_method',
+        'client_secret' => 'pi_console_orphan_secret',
+        'metadata' => [],
+    ]);
+
+    ApiRequestor::setHttpClient($fakeClient);
+
+    $this->artisan('app:stripe-test-order', [
+        'store_id' => $store->id,
+        'amount' => '25.00',
+        '--simulate-orphan' => true,
+    ])
+        ->assertExitCode(0)
+        ->expectsOutputToContain('pi_console_orphan')
+        ->expectsOutputToContain('reconcile-orphaned-payment-attempts');
+
+    $order = Order::where('store_id', $store->id)->firstOrFail();
+
+    // Exactly the state ReconcileOrphanedPaymentAttempts recovers from:
+    // Stripe has the payment, but no local claim or Wallet transaction
+    // points at it yet.
+    $attempt = attemptForOrder($order);
+
+    expect($attempt->status)
+        ->toBe(PaymentAttemptStatus::Pending)
+        ->and($attempt->provider_reference)
+        ->toBeNull()
+        ->and(StoreWalletTransaction::where('external_reference', 'pi_console_orphan')->exists())
+        ->toBeFalse();
+});
+
+it('with --simulate-orphan, the recovery flow it documents actually recovers the order end-to-end', function () {
+    $store = Store::factory()->create();
+
+    $fakeClient = new FakeStripeHttpClient([
+        'id' => 'pi_console_orphan_e2e',
+        'object' => 'payment_intent',
+        'amount' => 2500,
+        'currency' => 'eur',
+        'status' => 'requires_payment_method',
+        'client_secret' => 'pi_console_orphan_e2e_secret',
+        'metadata' => [],
+    ]);
+
+    ApiRequestor::setHttpClient($fakeClient);
+
+    $this->artisan('app:stripe-test-order', [
+        'store_id' => $store->id,
+        'amount' => '25.00',
+        '--simulate-orphan' => true,
+    ])->assertExitCode(0);
+
+    $order = Order::where('store_id', $store->id)->firstOrFail();
+
+    // Exactly the command line the tool's own output tells the operator
+    // to run — see the `--stale-after=0` guidance above.
+    Artisan::call('app:reconcile-orphaned-payment-attempts', ['--stale-after' => 0]);
+
+    $attempt = attemptForOrder($order);
+
+    expect($attempt->provider_reference)
+        ->toBe('pi_console_orphan_e2e')
+        ->and(StoreWalletTransaction::where('external_reference', 'pi_console_orphan_e2e')->exists())
+        ->toBeTrue()
+        ->and($attempt->status)
+        ->toBe(PaymentAttemptStatus::Claimed)
+        // Recovery only rebuilds pending local state — the Order is
+        // still `pending` until the Stripe webhook confirms it.
+        ->and($order->fresh()->status->slug)
+        ->toBe('pending');
 });

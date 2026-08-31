@@ -10,3 +10,7 @@ Artisan::command('inspire', function () {
 
 Schedule::command('app:check-kyc-expired')->dailyAt('00:00');
 Schedule::command('app:check-kyc-expiring-soon')->dailyAt('08:00');
+Schedule::command('app:reconcile-orphaned-payment-attempts')
+    ->everyFiveMinutes()
+    ->withoutOverlapping()
+    ->onOneServer();
