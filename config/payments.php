@@ -1,5 +1,7 @@
 <?php
 
+use App\Payments\EasyPay\EasyPayEventTranslator;
+use App\Payments\EasyPay\EasyPayPaymentProvider;
 use App\Payments\Stripe\StripeEventTranslator;
 use App\Payments\Stripe\StripePaymentProvider;
 
@@ -28,6 +30,10 @@ return [
         'stripe' => [
             'provider' => StripePaymentProvider::class,
             'translator' => StripeEventTranslator::class,
+        ],
+        'easypay' => [
+            'provider' => EasyPayPaymentProvider::class,
+            'translator' => EasyPayEventTranslator::class,
         ],
     ],
 
