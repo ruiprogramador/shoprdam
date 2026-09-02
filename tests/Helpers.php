@@ -107,3 +107,42 @@ function stripeChargeRefundedEvent(string $chargeId, string $paymentIntentId, ar
         ],
     ];
 }
+
+/**
+ * Post a raw EasyPay notification body to the easypay.webhook route. Unlike
+ * Stripe, EasyPay publishes no signature to compute — its documented
+ * security model is the receiving controller calling back the API using the
+ * notification's own `id` (see EasyPayWebhookController), not verifying the
+ * delivery itself.
+ */
+function postEasyPayWebhook(array $notification): Illuminate\Testing\TestResponse
+{
+    return test()->postJson(route('easypay.webhook'), $notification);
+}
+
+/** The generic {id, key, type, status, ...} shape every EasyPay notification carries. */
+function easyPayNotification(string $type, string $id, array $overrides = []): array
+{
+    return array_merge([
+        'id' => $id,
+        'key' => 'merchant-key-'.str()->random(8),
+        'type' => $type,
+        'status' => 'success',
+        'messages' => ['ok'],
+        'date' => now()->toDateTimeString(),
+    ], $overrides);
+}
+
+/** The shape EasyPayClient::retrieveSinglePayment()/createSinglePayment() return for a single payment resource. */
+function easyPayPaymentBody(string $id, string $orderId, array $overrides = []): array
+{
+    return array_merge([
+        'id' => $id,
+        'key' => $orderId,
+        'status' => 'success',
+        'method' => 'mbway',
+        'value' => '42.50',
+        'currency' => 'EUR',
+    ], $overrides);
+}
+

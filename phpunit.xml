@@ -31,6 +31,9 @@
         <env name="STRIPE_KEY" value="pk_test_dummy"/>
         <env name="STRIPE_SECRET" value="sk_test_dummy"/>
         <env name="STRIPE_WEBHOOK_SECRET" value="whsec_test_dummy"/>
+        <env name="EASYPAY_BASE_URL" value="https://api.test.easypay.pt/2.0/"/>
+        <env name="EASYPAY_ACCOUNT_ID" value="test-account-id-dummy"/>
+        <env name="EASYPAY_API_KEY" value="test-api-key-dummy"/>
         <env name="PULSE_ENABLED" value="false"/>
         <env name="TELESCOPE_ENABLED" value="false"/>
         <env name="NIGHTWATCH_ENABLED" value="false"/>

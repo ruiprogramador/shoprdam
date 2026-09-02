@@ -41,4 +41,10 @@ return [
         'webhook_secret' => env('STRIPE_WEBHOOK_SECRET'),
     ],
 
+    'easypay' => [
+        'base_url' => env('EASYPAY_BASE_URL', 'https://api.test.easypay.pt/2.0/'),
+        'account_id' => env('EASYPAY_ACCOUNT_ID'),
+        'api_key' => env('EASYPAY_API_KEY'),
+    ],
+
 ];
