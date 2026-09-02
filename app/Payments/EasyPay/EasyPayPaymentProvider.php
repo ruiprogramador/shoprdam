@@ -87,10 +87,21 @@ class EasyPayPaymentProvider implements PaymentProviderContract, SupportsCanonic
      * safe to repeat under the same Idempotency-Key, exactly like Stripe's
      * RateLimitException/ApiConnectionException handling. 400/403/404/422
      * are NonRetryable.
+     *
+     * InvalidArgumentException (thrown by methodCode() for a
+     * PaymentAttempt.method EasyPay doesn't support) is deterministic and
+     * local — no request was even sent, so nothing about retrying it could
+     * ever change the outcome. Deliberately its own explicit branch, not
+     * left to the `default` arm below, which exists only for a genuinely
+     * unclassified/unexpected exception type — one this domain has no
+     * specific reason to trust either way, so it stays Retryable rather
+     * than risk marking a real (but not-yet-seen) transient failure
+     * NonRetryable and stranding the attempt in needs_attention.
      */
     public function classifyFailure(Throwable $e): FailureClass
     {
         return match (true) {
+            $e instanceof InvalidArgumentException => FailureClass::NonRetryable,
             $e instanceof EasyPayConnectionException => FailureClass::Retryable,
             $e instanceof EasyPayRequestException => in_array($e->status, [409, 429, 500, 502, 503], true)
                 ? FailureClass::Retryable

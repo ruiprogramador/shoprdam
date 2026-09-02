@@ -352,6 +352,13 @@ it('classifies EasyPay 400/403/404/422 responses as non-retryable', function (in
         ->toBe(FailureClass::NonRetryable);
 })->with([400, 403, 404, 422]);
 
+it('classifies an unsupported method as non-retryable — no request was even sent', function () {
+    $provider = new App\Payments\EasyPay\EasyPayPaymentProvider;
+
+    expect($provider->classifyFailure(new InvalidArgumentException("EasyPay does not support payment method 'card'.")))
+        ->toBe(FailureClass::NonRetryable);
+});
+
 it('fails closed with a non-retryable error for a method EasyPay does not support', function () {
     $store = Store::factory()->create();
     $order = Order::factory()->forStore($store)->amount('42.50')->create();

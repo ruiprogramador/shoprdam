@@ -8,6 +8,7 @@ use App\Payments\EasyPay\Exceptions\EasyPayConnectionException;
 use App\Payments\EasyPay\Exceptions\EasyPayRequestException;
 use Illuminate\Http\Request;
 use Illuminate\Http\Response;
+use Illuminate\Support\Facades\Log;
 
 /**
  * EasyPay's own webhook endpoint. EasyPay publishes no signature/HMAC
@@ -27,6 +28,20 @@ use Illuminate\Http\Response;
  */
 class EasyPayWebhookController extends Controller
 {
+    /**
+     * The only EasyPay notification `type` this integration acts on —
+     * confirmed against docs.easypay.pt's own example payload for a
+     * completed `type: sale` single payment (the only creation shape
+     * EasyPayPaymentProvider ever sends). Deliberately an explicit
+     * allow-list, not a substring/heuristic match: EasyPay also sends
+     * notifications for refunds, chargebacks, voids, and subscription/
+     * frequent-payment events this integration does not support (see
+     * EasyPayEventTranslator's docblock) — any of those must fail closed
+     * (ignored, no API callback, no financial side effect) rather than be
+     * guessed at from the type string's shape.
+     */
+    private const SUPPORTED_TYPES = ['capture'];
+
     private EasyPayClient $client;
 
     public function __construct(
@@ -55,10 +70,14 @@ class EasyPayWebhookController extends Controller
             return response('Invalid payload.', 400);
         }
 
+        if (! in_array($type, self::SUPPORTED_TYPES, true)) {
+            Log::info("Ignoring unsupported EasyPay notification type: {$type}");
+
+            return response('OK', 200);
+        }
+
         try {
-            $resource = str_contains($type, 'refund')
-                ? $this->client->retrieveRefund($id)
-                : $this->client->retrieveSinglePayment($id);
+            $resource = $this->client->retrieveSinglePayment($id);
         } catch (EasyPayRequestException|EasyPayConnectionException $e) {
             report($e);
 

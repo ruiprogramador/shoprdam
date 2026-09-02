@@ -275,52 +275,37 @@ it('I: a stored terminal event survives reconciliation and repeated manual repla
         ->toBe('paid');
 });
 
-// --- J: refund ordering => a single reversal -----------------------------
+// --- J: a refund notification mid-orphan-recovery is safely ignored ------
 
-it('J: a refund that arrives before the payment confirms is queued and reversed exactly once, automatically, once success lands', function () {
+it('J: a refund notification for a still-orphaned attempt is safely ignored, with no API callback and no queued event', function () {
     $store = Store::factory()->create();
     $wallet = $store->wallets()->first();
     $order = Order::factory()->forStore($store)->amount('42.50')->create();
 
     easyPayOrderedOrphanedAttempt($order);
 
-    // The claim/pending Wallet transaction now exists, but the sale isn't
-    // `completed` yet — a refund can never reverse a non-completed sale.
-    reconcileWithEasyPayPayment('ep_j', $order);
+    // Refund support is out of scope for this integration (see
+    // EasyPayEventTranslator's class docblock) — a refund-type notification
+    // must never be queued or reversed, orphaned attempt or not.
+    $fake = new FakeEasyPayHttpClient;
+    $fake->install();
 
-    (new FakeEasyPayHttpClient(responsesById: [
-        'ref_j' => ['id' => 'ref_j', 'payment_id' => 'ep_j', 'status' => 'success', 'value' => '42.50'],
-    ]))->install();
     postEasyPayWebhook(easyPayNotification('refund', 'ref_j'))->assertOk();
 
-    expect($wallet->fresh()->balance)
-        ->toBe('0.00')
-        ->and(StoreWalletTransaction::where('external_reference', 'ep_j')->firstOrFail()->status->slug)
-        ->toBe('pending')
-        ->and(PaymentProviderEvent::where('provider_reference', 'ep_j')->firstOrFail()->status)
-        ->toBe(ProviderEventStatus::Pending);
+    expect($fake->requests)
+        ->toHaveCount(0)
+        ->and(PaymentProviderEvent::where('provider_reference', 'ref_j')->exists())
+        ->toBeFalse();
 
-    // Confirming the sale must itself replay the queued refund.
+    // Reconciliation, then a real success notification, still converge to
+    // paid normally — the ignored refund notification left nothing behind
+    // to interfere with it.
+    reconcileWithEasyPayPayment('ep_j', $order);
     verifyEasyPayNotificationAs('ep_j', easyPayPaymentBody('ep_j', (string) $order->id, ['status' => 'success']));
     postEasyPayWebhook(easyPayNotification('capture', 'ep_j'))->assertOk();
 
     expect($wallet->fresh()->balance)
-        ->toBe('0.00')
-        ->and($wallet->transactions()->count())
-        ->toBe(2)
+        ->toBe('42.50')
         ->and($order->fresh()->status->slug)
-        ->toBe('refunded')
-        ->and(PaymentProviderEvent::where('provider_reference', 'ep_j')->firstOrFail()->status)
-        ->toBe(ProviderEventStatus::Applied);
-
-    // A later redelivery of the same refund event must not reverse twice.
-    (new FakeEasyPayHttpClient(responsesById: [
-        'ref_j' => ['id' => 'ref_j', 'payment_id' => 'ep_j', 'status' => 'success', 'value' => '42.50'],
-    ]))->install();
-    postEasyPayWebhook(easyPayNotification('refund', 'ref_j'))->assertOk();
-
-    expect($wallet->fresh()->balance)
-        ->toBe('0.00')
-        ->and($wallet->transactions()->count())
-        ->toBe(2);
+        ->toBe('paid');
 });

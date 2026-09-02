@@ -146,13 +146,3 @@ function easyPayPaymentBody(string $id, string $orderId, array $overrides = []):
     ], $overrides);
 }
 
-/** The shape EasyPayClient::retrieveRefund() returns for a refund resource. */
-function easyPayRefundBody(string $id, string $paymentId, array $overrides = []): array
-{
-    return array_merge([
-        'id' => $id,
-        'payment_id' => $paymentId,
-        'status' => 'success',
-        'value' => '100.00',
-    ], $overrides);
-}

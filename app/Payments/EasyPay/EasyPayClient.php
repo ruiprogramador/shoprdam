@@ -43,20 +43,6 @@ class EasyPayClient
         return $this->request('get', "single/{$id}");
     }
 
-    /**
-     * GET /2.0/refund/{id} — the canonical refund state, used only by
-     * EasyPayWebhookController to verify a refund-type notification before
-     * translating it. EasyPay's public docs don't publish this response
-     * shape explicitly; assumed to follow the same {id, status, value,
-     * payment_id} shape their documented GET /2.0/capture/{id} response
-     * uses (EasyPay's REST resources are consistently shaped) — verify
-     * against the sandbox before relying on this for a real refund.
-     */
-    public function retrieveRefund(string $id): array
-    {
-        return $this->request('get', "refund/{$id}");
-    }
-
     private function request(string $method, string $path, array $params = [], ?string $idempotencyKey = null): array
     {
         $headers = [
@@ -71,7 +57,7 @@ class EasyPayClient
         try {
             $response = Http::baseUrl($this->baseUrl)->withHeaders($headers)->{$method}($path, $params);
         } catch (ConnectionException $e) {
-            throw new EasyPayConnectionException("Simulated network failure reaching EasyPay: {$e->getMessage()}", previous: $e);
+            throw new EasyPayConnectionException("Network failure reaching EasyPay: {$e->getMessage()}", previous: $e);
         }
 
         if ($response->failed()) {

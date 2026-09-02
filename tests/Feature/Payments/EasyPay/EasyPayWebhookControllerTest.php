@@ -217,102 +217,54 @@ it('returns 400 when the EasyPay API verification callback itself fails', functi
         ->toBe('pending');
 });
 
-// --- Refunds ---------------------------------------------------------------
+// --- Unsupported notification types fail closed ----------------------------
+//
+// Refund support is deliberately out of scope for this integration (see
+// EasyPayEventTranslator's class docblock) — EasyPay's own docs don't
+// publish a verified refund resource shape, and a Wallet reversal must
+// never rest on a guessed one. EasyPayWebhookController::SUPPORTED_TYPES
+// only ever routes a 'capture' notification to the verify-then-translate
+// path; everything else — refund, chargeback, void, or anything else
+// EasyPay might send — is safely ignored: no API callback, no financial
+// side effect, no queued event.
 
-it('reverses the wallet transaction and marks the order refunded on a verified full refund', function () {
+it('safely ignores a refund notification without any API callback or financial side effect', function () {
     fakeEasyPayVerification('ep_test_123', easyPayPaymentBody('ep_test_123', (string) $this->order->id, ['status' => 'success']));
     postEasyPayWebhook(easyPayNotification('capture', 'ep_test_123'))->assertOk();
 
-    (new FakeEasyPayHttpClient(responsesById: [
-        'ref_123' => easyPayRefundBody('ref_123', 'ep_test_123'),
-    ]))->install();
+    // This test's own "no callback happens" assertion is about the *refund*
+    // notification specifically — a fresh fake makes that unambiguous.
+    $fake = new FakeEasyPayHttpClient;
+    $fake->install();
 
     $response = postEasyPayWebhook(easyPayNotification('refund', 'ref_123'));
 
     $response->assertOk();
 
-    expect($this->wallet->fresh()->balance)
-        ->toBe('0.00')
-        ->and($this->wallet->transactions()->count())
-        ->toBe(2)
-        ->and($this->order->fresh()->status->slug)
-        ->toBe('refunded');
-});
-
-it('is idempotent when a refund notification is delivered twice', function () {
-    fakeEasyPayVerification('ep_test_123', easyPayPaymentBody('ep_test_123', (string) $this->order->id, ['status' => 'success']));
-    postEasyPayWebhook(easyPayNotification('capture', 'ep_test_123'))->assertOk();
-
-    (new FakeEasyPayHttpClient(responsesById: [
-        'ref_123' => easyPayRefundBody('ref_123', 'ep_test_123'),
-    ]))->install();
-
-    postEasyPayWebhook(easyPayNotification('refund', 'ref_123'))->assertOk();
-    $response = postEasyPayWebhook(easyPayNotification('refund', 'ref_123'));
-
-    $response->assertOk();
-
-    expect($this->wallet->fresh()->balance)
-        ->toBe('0.00')
-        ->and($this->wallet->transactions()->count())
-        ->toBe(2);
-});
-
-it('skips a partial refund instead of reversing the full transaction amount', function () {
-    fakeEasyPayVerification('ep_test_123', easyPayPaymentBody('ep_test_123', (string) $this->order->id, ['status' => 'success']));
-    postEasyPayWebhook(easyPayNotification('capture', 'ep_test_123'))->assertOk();
-
-    (new FakeEasyPayHttpClient(responsesById: [
-        'ref_partial' => easyPayRefundBody('ref_partial', 'ep_test_123', ['value' => '40.00']),
-    ]))->install();
-
-    $response = postEasyPayWebhook(easyPayNotification('refund', 'ref_partial'));
-
-    $response->assertOk();
-
-    expect($this->wallet->fresh()->balance)
+    expect($fake->requests)
+        ->toHaveCount(0)
+        ->and($this->wallet->fresh()->balance)
         ->toBe('100.00')
         ->and($this->wallet->transactions()->count())
         ->toBe(1)
         ->and($this->order->fresh()->status->slug)
-        ->toBe('paid');
+        ->toBe('paid')
+        ->and(PaymentProviderEvent::where('provider_reference', 'ref_123')->exists())
+        ->toBeFalse();
 });
 
-it('does nothing when a refund arrives before the payment has been confirmed', function () {
-    (new FakeEasyPayHttpClient(responsesById: [
-        'ref_early' => easyPayRefundBody('ref_early', 'ep_test_123'),
-    ]))->install();
+it('safely ignores any notification type outside the explicit allow-list, e.g. chargeback or void', function (string $type) {
+    $fake = new FakeEasyPayHttpClient;
+    $fake->install();
 
-    $response = postEasyPayWebhook(easyPayNotification('refund', 'ref_early'));
+    $response = postEasyPayWebhook(easyPayNotification($type, 'ep_test_123'));
 
     $response->assertOk();
 
-    expect($this->wallet->fresh()->balance)
-        ->toBe('0.00')
+    expect($fake->requests)
+        ->toHaveCount(0)
         ->and(StoreWalletTransaction::where('external_reference', 'ep_test_123')->firstOrFail()->status->slug)
         ->toBe('pending')
-        ->and($this->order->fresh()->status->slug)
-        ->toBe('pending')
-        ->and(PaymentProviderEvent::where('provider_reference', 'ep_test_123')->firstOrFail()->status)
-        ->toBe(ProviderEventStatus::Pending);
-});
-
-it('does nothing when a refund arrives for a transaction that was already marked failed', function () {
-    fakeEasyPayVerification('ep_test_123', easyPayPaymentBody('ep_test_123', (string) $this->order->id, ['status' => 'failed']));
-    postEasyPayWebhook(easyPayNotification('capture', 'ep_test_123'))->assertOk();
-
-    (new FakeEasyPayHttpClient(responsesById: [
-        'ref_after_fail' => easyPayRefundBody('ref_after_fail', 'ep_test_123'),
-    ]))->install();
-
-    $response = postEasyPayWebhook(easyPayNotification('refund', 'ref_after_fail'));
-
-    $response->assertOk();
-
-    expect($this->wallet->fresh()->balance)
-        ->toBe('0.00')
-        ->and(StoreWalletTransaction::where('external_reference', 'ep_test_123')->firstOrFail()->status->slug)
-        ->toBe('failed')
-        ->and($this->order->fresh()->status->slug)
-        ->toBe('failed');
-});
+        ->and(PaymentProviderEvent::where('provider_reference', 'ep_test_123')->exists())
+        ->toBeFalse();
+})->with(['refund', 'chargeback', 'void', 'subscription']);

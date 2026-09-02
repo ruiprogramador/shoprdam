@@ -5,7 +5,6 @@ namespace App\Payments\EasyPay;
 use App\Domain\Payments\Contracts\ProviderEventTranslator;
 use App\Domain\Payments\DTOs\ProviderEventOutcome;
 use App\Domain\Payments\Enums\ProviderEventType;
-use App\Domain\Payments\MinorUnits;
 use Illuminate\Support\Facades\Log;
 use LogicException;
 
@@ -15,6 +14,15 @@ use LogicException;
  * EasyPayPaymentProvider) allowed to know EasyPay's own status vocabulary
  * and resource shapes. See App\Domain\Payments\Services\PaymentEventProcessor
  * and docs/wallet/integrations.md.
+ *
+ * Refunds are deliberately NOT handled here. EasyPay's own docs don't
+ * publish a refund resource/notification shape (confirmed absent from
+ * docs.easypay.pt at the time of writing), and a Wallet reversal must never
+ * be triggered from a guessed field layout — see
+ * EasyPayWebhookController::SUPPORTED_TYPES, which never routes a refund
+ * notification here in the first place. Add refund support in a dedicated
+ * follow-up once the real resource shape has been verified against
+ * EasyPay's sandbox.
  *
  * EasyPay's single-payment status values (docs.easypay.pt): `success`,
  * `pending`, `waiting`, `delayed`, `failed`, `refunded`. Unlike Stripe's
@@ -42,64 +50,46 @@ class EasyPayEventTranslator implements ProviderEventTranslator
             throw new LogicException('EasyPayEventTranslator can only translate EasyPayNotification instances.');
         }
 
-        return str_contains($nativeEvent->type, 'refund')
-            ? $this->translateRefund($nativeEvent)
-            : $this->translatePayment($nativeEvent);
-    }
-
-    public function reconstructFromReplayPayload(array $payload): mixed
-    {
-        return new EasyPayNotification(
-            notificationId: $payload['notification_id'],
-            type: $payload['type'],
-            resource: $payload['resource'],
-        );
-    }
-
-    private function translatePayment(EasyPayNotification $notification): ProviderEventOutcome
-    {
-        $payment = $notification->resource;
+        $payment = $nativeEvent->resource;
         $status = $payment['status'] ?? null;
 
         return match ($status) {
             'success' => new ProviderEventOutcome(
                 provider: 'easypay',
-                eventId: $notification->notificationId,
-                eventType: $notification->type,
+                eventId: $nativeEvent->notificationId,
+                eventType: $nativeEvent->type,
                 type: ProviderEventType::Succeeded,
                 providerReference: (string) $payment['id'],
-                replayPayload: $this->minimalPayload($notification),
+                replayPayload: $this->minimalPayload($nativeEvent),
             ),
             'failed' => new ProviderEventOutcome(
                 provider: 'easypay',
-                eventId: $notification->notificationId,
-                eventType: $notification->type,
+                eventId: $nativeEvent->notificationId,
+                eventType: $nativeEvent->type,
                 type: ProviderEventType::Failed,
                 providerReference: (string) $payment['id'],
                 failureReason: $payment['messages'][0] ?? null,
-                replayPayload: $this->minimalPayload($notification),
+                replayPayload: $this->minimalPayload($nativeEvent),
             ),
             'pending', 'waiting', 'delayed' => tap(
                 new ProviderEventOutcome(
                     provider: 'easypay',
-                    eventId: $notification->notificationId,
-                    eventType: $notification->type,
+                    eventId: $nativeEvent->notificationId,
+                    eventType: $nativeEvent->type,
                     type: ProviderEventType::Informational,
                     providerReference: (string) $payment['id'],
                 ),
                 fn () => Log::info("EasyPay payment {$payment['id']} still resolving (status: {$status}).")
             ),
-            // A payment resource reporting 'refunded' directly (rather than
-            // via its own dedicated refund-type notification) is left
-            // Informational and logged rather than guessed at — the
-            // dedicated refund path (translateRefund()) is what carries a
-            // verified refunded amount; inventing one here risks reversing
-            // the wrong amount.
+            // Includes 'refunded' — refunds are not supported by this
+            // integration (see class docblock); a payment resource
+            // reporting that status is logged and otherwise ignored, never
+            // guessed at as a reversal.
             default => tap(
                 new ProviderEventOutcome(
                     provider: 'easypay',
-                    eventId: $notification->notificationId,
-                    eventType: $notification->type,
+                    eventId: $nativeEvent->notificationId,
+                    eventType: $nativeEvent->type,
                     type: ProviderEventType::Unrecognized,
                     providerReference: isset($payment['id']) ? (string) $payment['id'] : null,
                 ),
@@ -108,37 +98,12 @@ class EasyPayEventTranslator implements ProviderEventTranslator
         };
     }
 
-    /**
-     * `$notification->resource` here is the verified refund object EasyPay's
-     * `GET /2.0/refund/{id}` returns — see EasyPayClient::retrieveRefund()
-     * for the documented-shape assumption this relies on.
-     * `PaymentEventProcessor::applyRefunded()` already refuses to reverse
-     * anything less than the full original amount, so a partial refund is
-     * safely ignored generically — this translator doesn't need to special-case it.
-     */
-    private function translateRefund(EasyPayNotification $notification): ProviderEventOutcome
+    public function reconstructFromReplayPayload(array $payload): mixed
     {
-        $refund = $notification->resource;
-
-        if ($refund['status'] !== 'success' || ! isset($refund['payment_id'])) {
-            return new ProviderEventOutcome(
-                provider: 'easypay',
-                eventId: $notification->notificationId,
-                eventType: $notification->type,
-                type: ProviderEventType::Informational,
-                providerReference: isset($refund['payment_id']) ? (string) $refund['payment_id'] : null,
-            );
-        }
-
-        return new ProviderEventOutcome(
-            provider: 'easypay',
-            eventId: $notification->notificationId,
-            eventType: $notification->type,
-            type: ProviderEventType::Refunded,
-            providerReference: (string) $refund['payment_id'],
-            reversalReference: (string) $refund['id'],
-            refundedAmountMinorUnits: MinorUnits::fromDecimal((string) $refund['value']),
-            replayPayload: $this->minimalPayload($notification),
+        return new EasyPayNotification(
+            notificationId: $payload['notification_id'],
+            type: $payload['type'],
+            resource: $payload['resource'],
         );
     }
 
@@ -161,7 +126,6 @@ class EasyPayEventTranslator implements ProviderEventTranslator
                 'value' => $resource['value'] ?? null,
                 'currency' => $resource['currency'] ?? null,
                 'key' => $resource['key'] ?? null,
-                'payment_id' => $resource['payment_id'] ?? null,
                 'messages' => $resource['messages'] ?? null,
             ],
         ];
