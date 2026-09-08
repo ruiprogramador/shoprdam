@@ -6,6 +6,7 @@ use Inertia\Inertia;
 use Illuminate\Support\Facades\Auth;
 use App\Http\Controllers\User\ProfileController;
 use App\Http\Controllers\Vendor\KycController as VendorKycController;
+use App\Http\Controllers\Vendor\OrderPaymentController;
 
 use App\Models\State;
 use App\Models\City;
@@ -73,6 +74,13 @@ Route::middleware(['auth:web', 'role:vendor'])->group(function () {
         Route::get('/edit', [VendorKycController::class, 'edit'])->name('edit');
         Route::post('/', [VendorKycController::class, 'store'])->name('store');
         Route::post('/update', [VendorKycController::class, 'update'])->name('update');
+    });
+
+    // Vendor Order Payment Routes — provider-agnostic method selection (see
+    // App\Domain\Payments\PaymentMethodCatalog / App\Http\Controllers\Vendor\OrderPaymentController).
+    Route::prefix('vendor/orders/{order}/payment')->name('vendor.orders.payment.')->group(function () {
+        Route::get('/', [OrderPaymentController::class, 'show'])->name('show');
+        Route::post('/', [OrderPaymentController::class, 'store'])->name('store');
     });
 
 });

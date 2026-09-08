@@ -6,10 +6,12 @@ use Illuminate\Support\Facades\Vite;
 use Illuminate\Support\ServiceProvider;
 use Illuminate\Support\Facades\Gate;
 use App\Models\Kyc;
+use App\Models\Order;
 use App\Models\Store;
 use App\Observers\StoreObserver;
 use App\Policies\KycPolicy;
 use App\Policies\AdminKycPolicy;
+use App\Policies\OrderPolicy;
 
 class AppServiceProvider extends ServiceProvider
 {
@@ -23,6 +25,7 @@ class AppServiceProvider extends ServiceProvider
         Store::observe(StoreObserver::class);
 
         Gate::policy(Kyc::class, KycPolicy::class);
+        Gate::policy(Order::class, OrderPolicy::class);
 
         // Admin Kyc Policy - use admin guard for authorization
         Gate::define('admin-kyc', function ($user, string $ability, Kyc $kyc) {

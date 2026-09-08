@@ -2,9 +2,11 @@
 
 namespace App\Models;
 
+use App\Domain\Payments\Models\Payment;
 use Illuminate\Database\Eloquent\Factories\HasFactory;
 use Illuminate\Database\Eloquent\Model;
 use Illuminate\Database\Eloquent\Relations\BelongsTo;
+use Illuminate\Database\Eloquent\Relations\HasOne;
 use Illuminate\Database\Eloquent\Relations\MorphMany;
 use Nnjeim\World\Models\Currency;
 
@@ -41,6 +43,11 @@ class Order extends Model
     public function walletTransactions(): MorphMany
     {
         return $this->morphMany(StoreWalletTransaction::class, 'referenceable');
+    }
+
+    public function payment(): HasOne
+    {
+        return $this->hasOne(Payment::class);
     }
 
     public function isPending(): bool
