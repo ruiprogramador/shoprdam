@@ -39,6 +39,41 @@ return [
 
     /*
     |--------------------------------------------------------------------------
+    | Payment method registry
+    |--------------------------------------------------------------------------
+    |
+    | Maps a customer-facing method (stored on payment_attempts.method) to
+    | the provider that settles it and the label a checkout UI may show for
+    | it. This is what lets App\Domain\Payments\PaymentMethodCatalog answer
+    | "which methods exist" and "which provider backs this method" without
+    | a per-method if/switch anywhere in the checkout flow — adding a method
+    | to an existing provider (or moving one to a different provider) is
+    | editing this array, never App\Http\Controllers\Vendor\OrderPaymentController
+    | or App\Domain\Payments\Services\PaymentService.
+    |
+    | The customer only ever sees a method's `label` — the `provider` key is
+    | resolved server-side and never sent to (or trusted from) the client;
+    | see SelectPaymentMethodRequest.
+    |
+    */
+
+    'methods' => [
+        'card' => [
+            'provider' => 'stripe',
+            'label' => 'Card',
+        ],
+        'mbway' => [
+            'provider' => 'easypay',
+            'label' => 'MB WAY',
+        ],
+        'multibanco' => [
+            'provider' => 'easypay',
+            'label' => 'Multibanco',
+        ],
+    ],
+
+    /*
+    |--------------------------------------------------------------------------
     | Reconciliation
     |--------------------------------------------------------------------------
     |
