@@ -3,6 +3,7 @@
 namespace App\Console\Commands;
 
 use App\Domain\Payments\DTOs\PaymentsHealthReport;
+use App\Domain\Payments\Exceptions\InvalidPaymentsConfigException;
 use App\Domain\Payments\Services\PaymentsHealthCheck;
 use Illuminate\Console\Command;
 use Illuminate\Support\Facades\Log;
@@ -29,6 +30,11 @@ use Illuminate\Support\Facades\Log;
  * instead of standing up a separate metrics/alerting platform this project
  * has no other use for; "this command's last exit code was non-zero" is
  * already a condition any conventional cron/monitoring wrapper can act on.
+ * A third outcome, INVALID, means something different from both: a
+ * payments.health.* (or provider_event_retention_days) config value failed
+ * to parse (see App\Domain\Payments\ConfigInteger), so no report was
+ * computed at all — never conflate this with FAILURE, which means a report
+ * *was* computed and found something actionable.
  */
 class PaymentsHealth extends Command
 {
@@ -38,7 +44,17 @@ class PaymentsHealth extends Command
 
     public function handle(PaymentsHealthCheck $healthCheck): int
     {
-        $report = $healthCheck->report();
+        try {
+            $report = $healthCheck->report();
+        } catch (InvalidPaymentsConfigException $e) {
+            // Deliberately never falls back to computing a report against a
+            // coerced default here — an operator seeing HEALTHY/NEEDS
+            // ATTENTION printed at all must be able to trust it reflects
+            // real state, not a misconfigured threshold silently read as 0.
+            $this->error("Refusing to compute a payments health report: {$e->getMessage()}");
+
+            return self::INVALID;
+        }
 
         if ($this->option('json')) {
             $this->line(json_encode($report->toArray(), JSON_PRETTY_PRINT | JSON_UNESCAPED_SLASHES));

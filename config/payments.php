@@ -108,6 +108,16 @@ return [
     | ordinary retry — is never itself reported as unhealthy; see each
     | threshold's own key for why its multiple was chosen.
     |
+    | Deliberately not `(int) env(...)` here, for the same reason as
+    | `provider_event_retention_days` above: that cast silently turns a
+    | malformed env value into `0`, which for these thresholds means "flag
+    | every pending attempt/event as stale immediately" — a misleading
+    | health report, not a safe default.
+    | App\Domain\Payments\Services\PaymentsHealthCheck validates each of
+    | these raw values itself (App\Domain\Payments\ConfigInteger, the same
+    | strict parser PrunePaymentProviderEvents uses) and fails closed
+    | (throws rather than reports) on anything that doesn't parse.
+    |
     */
 
     'health' => [
@@ -115,21 +125,23 @@ return [
         // failed within a few reconciliation cycles (every 5 minutes) —
         // three full cycles of headroom before it's worth a human's
         // attention.
-        'stale_pending_minutes' => (int) env('PAYMENTS_HEALTH_STALE_PENDING_MINUTES', 15),
+        'stale_pending_minutes' => env('PAYMENTS_HEALTH_STALE_PENDING_MINUTES', 15),
 
         // Double the default --lease-timeout (15 minutes): a lease still
         // outstanding this long means reconciliation isn't actually
         // resolving this attempt, not just waiting for its next tick.
-        'stale_lease_minutes' => (int) env('PAYMENTS_HEALTH_STALE_LEASE_MINUTES', 30),
+        'stale_lease_minutes' => env('PAYMENTS_HEALTH_STALE_LEASE_MINUTES', 30),
 
         // Same three-cycle headroom as stale_pending_minutes — an unmatched
         // provider event is replayed as a side effect of the same
         // reconciliation run, so the two share a rationale.
-        'stale_event_minutes' => (int) env('PAYMENTS_HEALTH_STALE_EVENT_MINUTES', 15),
+        'stale_event_minutes' => env('PAYMENTS_HEALTH_STALE_EVENT_MINUTES', 15),
 
         // More than a couple of failed replay attempts on the same event —
-        // one or two is an ordinary transient retry, not yet a signal.
-        'replay_attempts_warning' => (int) env('PAYMENTS_HEALTH_REPLAY_ATTEMPTS_WARNING', 3),
+        // one or two is an ordinary transient retry, not yet a signal. Must
+        // be >= 1 (not just >= 0): a threshold of 0 would flag every
+        // pending event as "repeatedly failing" on its very first replay.
+        'replay_attempts_warning' => env('PAYMENTS_HEALTH_REPLAY_ATTEMPTS_WARNING', 3),
     ],
 
 ];

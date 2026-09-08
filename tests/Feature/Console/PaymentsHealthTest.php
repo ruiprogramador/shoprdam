@@ -297,3 +297,114 @@ it('never surfaces a provider event\'s raw payload content in its output', funct
 
     expect(Artisan::output())->not->toContain('DO-NOT-LEAK-CANARY-XYZ');
 });
+
+// --- Config hardening: thresholds must never be silently coerced via (int) ---
+
+it('accepts a valid string-typed health threshold, e.g. as env() would provide', function () {
+    config(['payments.health.stale_pending_minutes' => '7']);
+    healthAttempt(['status' => PaymentAttemptStatus::Pending, 'created_at' => now()->subMinutes(10)]);
+
+    $report = runHealthJson();
+
+    expect($report['thresholds']['stale_pending_minutes'])->toBe(7)
+        ->and($report['stale_pending_attempts']['count'])->toBe(1);
+});
+
+it('accepts zero for the time-based thresholds without throwing', function () {
+    config([
+        'payments.health.stale_pending_minutes' => 0,
+        'payments.health.stale_lease_minutes' => 0,
+        'payments.health.stale_event_minutes' => 0,
+    ]);
+
+    $exitCode = Artisan::call('payments:health', ['--json' => true]);
+    $report = json_decode(Artisan::output(), true);
+
+    expect($exitCode)->not->toBe(Illuminate\Console\Command::INVALID)
+        ->and($report)->not->toBeNull()
+        ->and($report['thresholds']['stale_pending_minutes'])->toBe(0);
+});
+
+it('accepts replay_attempts_warning at its minimum valid value of 1', function () {
+    config(['payments.health.replay_attempts_warning' => 1]);
+    healthProviderEvent(['replay_attempts' => 1]);
+
+    $report = runHealthJson();
+
+    expect($report['repeated_replay_failures']['count'])->toBe(1);
+});
+
+it('rejects an invalid health threshold instead of silently coercing it to zero', function (string $key, mixed $invalidValue) {
+    config(["payments.health.{$key}" => $invalidValue]);
+
+    $exitCode = Artisan::call('payments:health', ['--json' => true]);
+
+    expect($exitCode)->toBe(Illuminate\Console\Command::INVALID)
+        ->and(Artisan::output())->toContain("payments.health.{$key}")
+        ->and(json_decode(Artisan::output(), true))->toBeNull();
+})->with([
+    'stale_pending_minutes / non-numeric' => ['stale_pending_minutes', 'abc'],
+    'stale_pending_minutes / decimal' => ['stale_pending_minutes', '3.5'],
+    'stale_pending_minutes / empty string' => ['stale_pending_minutes', ''],
+    'stale_pending_minutes / negative' => ['stale_pending_minutes', -1],
+    'stale_lease_minutes / non-numeric' => ['stale_lease_minutes', 'abc'],
+    'stale_lease_minutes / negative' => ['stale_lease_minutes', -5],
+    'stale_event_minutes / decimal' => ['stale_event_minutes', '1.5'],
+    'stale_event_minutes / empty string' => ['stale_event_minutes', ''],
+    'replay_attempts_warning / non-numeric' => ['replay_attempts_warning', 'abc'],
+    'replay_attempts_warning / decimal' => ['replay_attempts_warning', '2.5'],
+    'replay_attempts_warning / empty string' => ['replay_attempts_warning', ''],
+    'replay_attempts_warning / negative' => ['replay_attempts_warning', -1],
+    'replay_attempts_warning / zero (below its minimum of 1)' => ['replay_attempts_warning', 0],
+]);
+
+it('rejects an invalid provider_event_retention_days instead of silently coercing it to zero', function (mixed $invalidValue) {
+    config(['payments.provider_event_retention_days' => $invalidValue]);
+
+    $exitCode = Artisan::call('payments:health', ['--json' => true]);
+
+    expect($exitCode)->toBe(Illuminate\Console\Command::INVALID)
+        ->and(Artisan::output())->toContain('payments.provider_event_retention_days')
+        ->and(json_decode(Artisan::output(), true))->toBeNull();
+})->with([
+    'non-numeric' => ['abc'],
+    'decimal' => ['3.5'],
+    'empty string' => [''],
+    'negative' => [-1],
+]);
+
+it('accepts provider_event_retention_days = 0 as a valid, intentional zero-retention value', function () {
+    config(['payments.provider_event_retention_days' => 0]);
+    healthProviderEvent(['status' => ProviderEventStatus::Applied, 'processed_at' => now()->subMinute()]);
+
+    $report = runHealthJson();
+
+    expect($report['events_eligible_for_pruning'])->toBe(1);
+});
+
+it('never silently reports a fresh pending attempt as stale from a coerced-to-zero threshold', function () {
+    // A brand-new pending attempt (age 0) — (int) 'abc' === 0 would make
+    // `age_minutes >= 0` match it immediately, a false-positive "stale"
+    // reading manufactured by garbage config, not a real incident.
+    healthAttempt(['status' => PaymentAttemptStatus::Pending, 'created_at' => now()]);
+    config(['payments.health.stale_pending_minutes' => 'abc']);
+
+    $exitCode = Artisan::call('payments:health', ['--json' => true]);
+
+    expect($exitCode)->toBe(Illuminate\Console\Command::INVALID)
+        ->and(json_decode(Artisan::output(), true))->toBeNull();
+});
+
+it('never silently reports every fresh provider event as a repeated replay failure from a coerced-to-zero threshold', function () {
+    // replay_attempts = 0 is the most ordinary state an event can be in —
+    // (int) 'abc' === 0 would make `replay_attempts >= 0` match it, falsely
+    // flagging brand-new events as "repeatedly failing" instead of refusing
+    // to report at all.
+    healthProviderEvent(['replay_attempts' => 0]);
+    config(['payments.health.replay_attempts_warning' => 'abc']);
+
+    $exitCode = Artisan::call('payments:health', ['--json' => true]);
+
+    expect($exitCode)->toBe(Illuminate\Console\Command::INVALID)
+        ->and(json_decode(Artisan::output(), true))->toBeNull();
+});

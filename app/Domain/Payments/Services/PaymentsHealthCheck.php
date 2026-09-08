@@ -2,9 +2,11 @@
 
 namespace App\Domain\Payments\Services;
 
+use App\Domain\Payments\ConfigInteger;
 use App\Domain\Payments\DTOs\PaymentsHealthReport;
 use App\Domain\Payments\Enums\PaymentAttemptStatus;
 use App\Domain\Payments\Enums\ProviderEventStatus;
+use App\Domain\Payments\Exceptions\InvalidPaymentsConfigException;
 use App\Domain\Payments\Models\PaymentAttempt;
 use App\Domain\Payments\Models\PaymentProviderEvent;
 use Illuminate\Database\Eloquent\Builder;
@@ -16,7 +18,7 @@ use Illuminate\Support\Facades\DB;
  * queries against payment_attempts/payment_provider_events — see that DTO's
  * own docblock for what "actionable" vs. "informational" means. Every
  * method here is a SELECT; none may ever call ->update()/->save()/->delete()/
- * ->increment() on anything — tests/Feature/Domain/Payments/PaymentsHealthCheckTest.php
+ * ->increment() on anything — tests/Feature/Console/PaymentsHealthTest.php
  * asserts row counts and column values are byte-for-byte unchanged before
  * and after report(), which is the one guarantee this class (and
  * `php artisan payments:health`, its only caller) exists to uphold.
@@ -28,6 +30,12 @@ use Illuminate\Support\Facades\DB;
  * ever reach a PaymentsHealthReport, so its toArray() is always safe to log
  * or print (see config('payments.health') for the thresholds driving what
  * counts as "stale"/"repeated" below).
+ *
+ * report() validates every config value it depends on (thresholds(),
+ * retentionDays()) before running a single query — see
+ * App\Domain\Payments\ConfigInteger and InvalidPaymentsConfigException. A
+ * malformed threshold throws instead of silently computing against a
+ * coerced `0`; there is no fallback default at this layer.
  */
 class PaymentsHealthCheck
 {
@@ -35,7 +43,12 @@ class PaymentsHealthCheck
 
     public function report(): PaymentsHealthReport
     {
+        // Every config value this report depends on is parsed and validated
+        // up front, before a single query runs — a malformed threshold must
+        // fail this call outright (see ConfigInteger/InvalidPaymentsConfigException),
+        // never silently compute against a coerced 0 partway through.
         $thresholds = $this->thresholds();
+        $retentionDays = $this->retentionDays();
 
         [$needsAttentionCount, $needsAttentionByProvider, $needsAttentionSample] = $this->needsAttention();
         [$stalePendingCount, $stalePendingByProvider, $stalePendingSample] = $this->stalePending($thresholds['stale_pending_minutes']);
@@ -64,21 +77,61 @@ class PaymentsHealthCheck
             repeatedReplayFailureByProvider: $repeatedReplayFailureByProvider,
             repeatedReplayFailureSample: $repeatedReplayFailureSample,
             recoveryFailureCount: $this->recoveryFailureCount(),
-            eventsEligibleForPruning: $this->eventsEligibleForPruning(),
+            eventsEligibleForPruning: $this->eventsEligibleForPruning($retentionDays),
             providerDistribution: $this->providerDistribution(),
             thresholds: $thresholds,
         );
     }
 
-    /** @return array<string, int> */
+    /**
+     * Each of the four `payments.health.*` values, strictly parsed via
+     * ConfigInteger — never a bare `(int)` cast (see config/payments.php's
+     * own docblock for why). The three time-based thresholds accept any
+     * non-negative integer; `replay_attempts_warning` must be >= 1, since 0
+     * would flag every pending event as "repeatedly failing" on its very
+     * first replay attempt.
+     *
+     * @return array<string, int>
+     *
+     * @throws InvalidPaymentsConfigException if any of the four fails to parse
+     */
     private function thresholds(): array
     {
         return [
-            'stale_pending_minutes' => (int) config('payments.health.stale_pending_minutes', 15),
-            'stale_lease_minutes' => (int) config('payments.health.stale_lease_minutes', 30),
-            'stale_event_minutes' => (int) config('payments.health.stale_event_minutes', 15),
-            'replay_attempts_warning' => (int) config('payments.health.replay_attempts_warning', 3),
+            'stale_pending_minutes' => $this->parseConfigInteger('payments.health.stale_pending_minutes', min: 0),
+            'stale_lease_minutes' => $this->parseConfigInteger('payments.health.stale_lease_minutes', min: 0),
+            'stale_event_minutes' => $this->parseConfigInteger('payments.health.stale_event_minutes', min: 0),
+            'replay_attempts_warning' => $this->parseConfigInteger('payments.health.replay_attempts_warning', min: 1),
         ];
+    }
+
+    /**
+     * The same `payments.provider_event_retention_days` value
+     * App\Console\Commands\PrunePaymentProviderEvents prunes by, parsed with
+     * the exact same rule (ConfigInteger, min 0) so eventsEligibleForPruning()
+     * can never diverge from what a real prune run would actually delete.
+     *
+     * @throws InvalidPaymentsConfigException if it fails to parse
+     */
+    private function retentionDays(): int
+    {
+        return $this->parseConfigInteger('payments.provider_event_retention_days', min: 0);
+    }
+
+    /** @throws InvalidPaymentsConfigException if $key's configured value doesn't parse as an integer >= $min */
+    private function parseConfigInteger(string $key, int $min): int
+    {
+        $raw = config($key);
+        $parsed = ConfigInteger::parse($raw, $min);
+
+        if ($parsed === null) {
+            throw new InvalidPaymentsConfigException(
+                "Invalid value for {$key}: '".ConfigInteger::printable($raw)."' is not ".
+                ($min > 0 ? "an integer >= {$min}." : 'a non-negative integer.')
+            );
+        }
+
+        return $parsed;
     }
 
     /** @return array{0: int, 1: array<string, int>, 2: list<array<string, mixed>>} */
@@ -229,10 +282,14 @@ class PaymentsHealthCheck
             ->count();
     }
 
-    /** Mirrors App\Console\Commands\PrunePaymentProviderEvents's own eligibility predicate, read-only. */
-    private function eventsEligibleForPruning(): int
+    /**
+     * Mirrors App\Console\Commands\PrunePaymentProviderEvents's own
+     * eligibility predicate exactly, read-only — $retentionDays comes from
+     * retentionDays() (same ConfigInteger rule that command's own
+     * --days/config parsing uses), never re-derived here.
+     */
+    private function eventsEligibleForPruning(int $retentionDays): int
     {
-        $retentionDays = max(0, (int) config('payments.provider_event_retention_days', 90));
         $cutoff = now()->subDays($retentionDays);
 
         return PaymentProviderEvent::query()
