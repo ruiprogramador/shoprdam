@@ -2,6 +2,7 @@
 
 namespace App\Console\Commands;
 
+use App\Domain\Payments\ConfigInteger;
 use App\Domain\Payments\Enums\ProviderEventStatus;
 use App\Domain\Payments\Models\PaymentProviderEvent;
 use Illuminate\Console\Command;
@@ -109,27 +110,22 @@ class PrunePaymentProviderEvents extends Command
     }
 
     /**
-     * Accepts only a value that is *exactly* a non-negative integer —
-     * `FILTER_VALIDATE_INT` rejects '', 'abc', and '3.5' outright (returns
-     * `false`, not a truncated/rounded guess); a negative but
-     * otherwise-well-formed integer like '-1' is then rejected by the
-     * explicit `< 0` check below. Never coerces — either the value parses
-     * cleanly as >= 0, or this returns `null` and prints exactly which
-     * source (`--days` or the config key) failed.
+     * Delegates the actual parsing rule to App\Domain\Payments\ConfigInteger
+     * (shared with App\Domain\Payments\Services\PaymentsHealthCheck, so
+     * "what counts as a valid retention value" can't drift between the two)
+     * and only ever adds this command's own failure behavior on top: print
+     * exactly which source (`--days` or the config key) failed, then return
+     * `null` so `handle()` refuses to run instead of falling back to any
+     * default.
      */
     private function parseNonNegativeInteger(mixed $value, string $source): ?int
     {
-        $normalized = is_int($value) ? (string) $value : $value;
+        $parsed = ConfigInteger::parse($value, min: 0);
 
-        $filtered = is_string($normalized) ? filter_var($normalized, FILTER_VALIDATE_INT) : false;
-
-        if ($filtered === false || $filtered < 0) {
-            $printable = is_scalar($value) ? (string) $value : get_debug_type($value);
-            $this->error("Invalid retention value for {$source}: '{$printable}' is not a non-negative integer.");
-
-            return null;
+        if ($parsed === null) {
+            $this->error("Invalid retention value for {$source}: '".ConfigInteger::printable($value)."' is not a non-negative integer.");
         }
 
-        return $filtered;
+        return $parsed;
     }
 }

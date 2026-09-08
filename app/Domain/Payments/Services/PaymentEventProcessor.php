@@ -61,10 +61,10 @@ class PaymentEventProcessor
             ProviderEventType::Failed => $this->applyFailed($outcome),
             ProviderEventType::Refunded => $this->applyRefunded($outcome),
             ProviderEventType::Informational => tap(EventApplicationOutcome::Applied, function () use ($outcome) {
-                Log::info("Informational provider event, no state change: {$outcome->provider}/{$outcome->eventType}");
+                Log::info('Informational provider event, no state change.', $this->eventLogContext($outcome));
             }),
             ProviderEventType::Unrecognized => tap(EventApplicationOutcome::Ignored, function () use ($outcome) {
-                Log::info("Unhandled {$outcome->provider} event type: {$outcome->eventType}");
+                Log::info('Unhandled provider event type.', $this->eventLogContext($outcome));
             }),
         };
     }
@@ -221,9 +221,12 @@ class PaymentEventProcessor
 
         if ($outcome->refundedAmountMinorUnits !== $expected) {
             Log::warning(
-                "Ignoring a refund for {$outcome->provider}/{$outcome->providerReference}: ".
-                "refunded {$outcome->refundedAmountMinorUnits}/{$expected} so far. ".
-                'Reversal only happens once the refund is full; partial reversals are not supported.'
+                'Ignoring a partial refund: reversal only happens once the refund is full.',
+                [
+                    ...$this->eventLogContext($outcome),
+                    'refunded_minor_units' => $outcome->refundedAmountMinorUnits,
+                    'expected_minor_units' => $expected,
+                ],
             );
 
             // This event's refunded amount is a fixed historical value
@@ -325,6 +328,8 @@ class PaymentEventProcessor
             $payment->update(['status' => $paymentStatus]);
         }
 
+        $attempt = null;
+
         if ($attemptStatus !== null) {
             $attempt = PaymentAttempt::where('payment_id', $payment->id)
                 ->where('provider', $transaction->external_provider)
@@ -341,6 +346,15 @@ class PaymentEventProcessor
 
             $attempt->update(['status' => $attemptStatus]);
         }
+
+        Log::info('Payment settlement applied from a provider event.', [
+            'payment_id' => $payment->id,
+            'payment_attempt_id' => $attempt?->id,
+            'order_id' => $order->id,
+            'provider' => $transaction->external_provider,
+            'provider_reference' => $transaction->external_reference,
+            'order_status' => $orderStatusSlug,
+        ]);
     }
 
     /**
@@ -363,6 +377,8 @@ class PaymentEventProcessor
                 'payload' => $outcome->replayPayload,
                 'status' => ProviderEventStatus::Pending,
             ]);
+
+            Log::info('Queued a provider event with no matching local claim yet.', $this->eventLogContext($outcome));
         } catch (QueryException $e) {
             if (! PaymentProviderEvent::where('provider', $outcome->provider)
                 ->where('provider_event_id', $outcome->eventId)
@@ -370,5 +386,26 @@ class PaymentEventProcessor
                 throw $e;
             }
         }
+    }
+
+    /**
+     * The correlation fields every operational log line in this class
+     * carries where available — see config('payments.health') and
+     * App\Domain\Payments\Services\PaymentsHealthCheck, which report on the
+     * same payment_provider_events rows these log lines describe as they
+     * happen. Deliberately excludes `payload`: never the raw provider
+     * payload, only the already-normalized fields also stored on
+     * payment_provider_events itself.
+     *
+     * @return array<string, string|null>
+     */
+    private function eventLogContext(ProviderEventOutcome $outcome): array
+    {
+        return [
+            'provider' => $outcome->provider,
+            'provider_reference' => $outcome->providerReference,
+            'provider_event_id' => $outcome->eventId,
+            'event_type' => $outcome->eventType,
+        ];
     }
 }
