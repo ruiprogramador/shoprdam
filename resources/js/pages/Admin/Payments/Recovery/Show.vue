@@ -13,7 +13,9 @@ type Attempt = {
     status: string
     provider_reference: string | null
     recovery_attempts: number
-    last_recovery_error: string | null
+    // The recovery error's own text is never sent to the browser — see
+    // App\Domain\Payments\RecoveryErrorFormatter — only whether one exists.
+    has_last_recovery_error: boolean
     last_attempted_at: string | null
     locked_until: string | null
     created_at: string
@@ -23,7 +25,7 @@ type PendingEvent = {
     id: number
     event_type: string
     replay_attempts: number
-    last_replay_error: string | null
+    has_last_replay_error: boolean
     created_at: string
 }
 
@@ -86,9 +88,9 @@ function retry() {
                 <div><span class="text-gray-500">Recovery attempts</span><br>{{ attempt.recovery_attempts }}</div>
                 <div><span class="text-gray-500">Locked until</span><br>{{ attempt.locked_until ?? '—' }}</div>
                 <div><span class="text-gray-500">Last attempted</span><br>{{ attempt.last_attempted_at ?? '—' }}</div>
-                <div class="col-span-2" v-if="attempt.last_recovery_error">
+                <div class="col-span-2" v-if="attempt.has_last_recovery_error">
                     <span class="text-gray-500">Last recovery error</span><br>
-                    <span class="text-red-700">{{ attempt.last_recovery_error }}</span>
+                    <span class="text-red-700">An error is on record for this attempt — see server logs for detail.</span>
                 </div>
             </div>
 
@@ -127,7 +129,7 @@ function retry() {
                             <tr v-for="event in pending_events" :key="event.id">
                                 <td class="px-4 py-2">{{ event.event_type }}</td>
                                 <td class="px-4 py-2">{{ event.replay_attempts }}</td>
-                                <td class="px-4 py-2 text-red-700">{{ event.last_replay_error ?? '—' }}</td>
+                                <td class="px-4 py-2 text-red-700">{{ event.has_last_replay_error ? 'Recorded — see server logs' : '—' }}</td>
                                 <td class="px-4 py-2">{{ event.created_at }}</td>
                             </tr>
                         </tbody>

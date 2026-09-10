@@ -2,6 +2,7 @@
 
 namespace App\Console\Commands;
 
+use App\Domain\Payments\ConfigInteger;
 use App\Domain\Payments\Enums\PaymentAttemptStatus;
 use App\Domain\Payments\Enums\ProviderEventStatus;
 use App\Domain\Payments\Enums\RecoveryOutcome;
@@ -83,10 +84,19 @@ class ReconcileOrphanedPaymentAttempts extends Command
 
     public function handle(PaymentService $paymentService, PaymentAttemptRecoveryService $recovery): int
     {
-        $staleAfter = (int) $this->option('stale-after');
-        $maxAttempts = (int) $this->option('max-attempts');
-        $maxAge = (int) $this->option('max-age');
-        $leaseTimeout = (int) $this->option('lease-timeout');
+        $staleAfter = $this->parseOption('stale-after');
+        $maxAttempts = $this->parseOption('max-attempts');
+        $maxAge = $this->parseOption('max-age');
+        $leaseTimeout = $this->parseOption('lease-timeout');
+
+        // Every option must at least parse as *some* integer before any of
+        // them are trusted for the range checks below — a bare `(int)` cast
+        // would silently turn '--stale-after=abc' into `0`, which passes
+        // "must be >= 0" and broadens provider-call eligibility to
+        // everything ever created instead of refusing to run.
+        if (in_array(null, [$staleAfter, $maxAttempts, $maxAge, $leaseTimeout], true)) {
+            return self::INVALID;
+        }
 
         if (! $this->validateOptions($staleAfter, $maxAttempts, $maxAge, $leaseTimeout)) {
             return self::INVALID;
@@ -146,6 +156,29 @@ class ReconcileOrphanedPaymentAttempts extends Command
         }
 
         return self::SUCCESS;
+    }
+
+    /**
+     * Strictly parses one integer CLI option via App\Domain\Payments\ConfigInteger
+     * — the same fail-closed rule App\Console\Commands\PrunePaymentProviderEvents
+     * and App\Domain\Payments\Services\PaymentsHealthCheck already use for
+     * configurable integers, so "what counts as a valid value here" can't
+     * drift between them. `min: PHP_INT_MIN` deliberately accepts any
+     * well-formed integer, however out of range — validateOptions() below is
+     * solely responsible for range checks (and their exact, already-tested
+     * messages); this only ever catches "not an integer at all"
+     * ('abc', '3.5', '').
+     */
+    private function parseOption(string $name): ?int
+    {
+        $raw = $this->option($name);
+        $parsed = ConfigInteger::parse($raw, min: PHP_INT_MIN);
+
+        if ($parsed === null) {
+            $this->error("--{$name} must be an integer. Got: '".ConfigInteger::printable($raw)."'.");
+        }
+
+        return $parsed;
     }
 
     /**

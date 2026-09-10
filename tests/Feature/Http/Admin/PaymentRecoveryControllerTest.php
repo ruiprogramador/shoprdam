@@ -7,10 +7,12 @@ use App\Domain\Payments\Models\Payment;
 use App\Domain\Payments\Models\PaymentAttempt;
 use App\Domain\Payments\Models\PaymentProviderEvent;
 use App\Domain\Payments\Models\PaymentRecoveryAction;
+use App\Domain\Payments\Services\PaymentAttemptRecoveryService;
 use App\Models\Admin;
 use App\Models\Order;
 use App\Models\Store;
 use App\Models\StoreWalletTransaction;
+use App\Policies\PaymentRecoveryPolicy;
 use App\Services\Wallet\WalletService;
 use App\Services\Wallet\WalletTransactionService;
 use App\Domain\Wallet\WalletTransactionReference;
@@ -382,4 +384,172 @@ it('still fails closed against a network failure — a connection error is retry
     expect($fresh->status)->toBe(PaymentAttemptStatus::Pending) // still retryable, not needs_attention
         ->and($fresh->recovery_attempts)->toBe(1)
         ->and(PaymentRecoveryAction::first()->outcome)->toBe('retry_pending');
+});
+
+// --- Canary: a secret embedded in a provider exception must never leak anywhere this UI exposes ---
+
+it('never lets a secret embedded in a provider exception message reach the audit row, the flash message, or Inertia props', function () {
+    $admin = Admin::factory()->create();
+    $order = recoveryOrder('20.00');
+    $attempt = recoveryOrphanedAttempt($order);
+
+    $secret = 'CANARY_SECRET_DO_NOT_EXPOSE_51SECRETVALUE0000000000';
+
+    ApiRequestor::setHttpClient(new FakeStripeHttpClient(
+        throws: new RuntimeException("Request failed with key {$secret}"),
+    ));
+
+    $response = $this->actingAs($admin, 'admin')
+        ->post(route('admin.payments.recovery.retry', $attempt));
+
+    $response->assertRedirect();
+    $response->assertSessionHas('error', fn ($message) => ! str_contains($message, $secret));
+
+    $record = PaymentRecoveryAction::first();
+
+    expect($record->detail)->not->toContain($secret)
+        // Structured metadata only — provider and exception class, never
+        // the message text, regardless of what it contained.
+        ->and($record->detail)->toContain('stripe')
+        ->and($record->detail)->toContain(RuntimeException::class);
+
+    $show = $this->actingAs($admin, 'admin')->get(route('admin.payments.recovery.show', $attempt));
+
+    $show->assertOk();
+    expect($show->getContent())->not->toContain($secret);
+});
+
+it('never lets a secret embedded in a stored last_recovery_error reach the inspect page', function () {
+    $admin = Admin::factory()->create();
+    $order = recoveryOrder('20.00');
+    $attempt = recoveryOrphanedAttempt($order);
+
+    $secret = 'whsec_STOREDCANARYSECRET1234567890';
+    $attempt->forceFill(['last_recovery_error' => "Webhook verification failed: {$secret}"])->save();
+
+    $show = $this->actingAs($admin, 'admin')->get(route('admin.payments.recovery.show', $attempt));
+
+    $show->assertOk();
+    $show->assertInertia(fn ($page) => $page->where('attempt.has_last_recovery_error', true));
+    expect($show->getContent())->not->toContain($secret);
+});
+
+it('never lets a secret embedded in a pending event\'s last_replay_error reach the inspect page', function () {
+    $admin = Admin::factory()->create();
+    $order = recoveryOrder('20.00');
+    $attempt = recoveryClaimedAttemptWithPendingWalletTransaction($order, 'pi_canary_replay');
+
+    $secret = 'Authorization: Bearer canary-secret-token-xyz';
+
+    PaymentProviderEvent::create([
+        'provider' => 'stripe',
+        'provider_event_id' => 'evt_canary_replay',
+        'event_type' => 'payment_intent.succeeded',
+        'provider_reference' => 'pi_canary_replay',
+        'payload' => stripePaymentIntentEvent('payment_intent.succeeded', 'pi_canary_replay', ['amount' => 2000]),
+        'status' => ProviderEventStatus::Pending,
+        'replay_attempts' => 1,
+        'last_replay_error' => "Replay failed — {$secret}",
+    ]);
+
+    $show = $this->actingAs($admin, 'admin')->get(route('admin.payments.recovery.show', $attempt));
+
+    $show->assertOk();
+    $show->assertInertia(fn ($page) => $page->where('pending_events.0.has_last_replay_error', true));
+    expect($show->getContent())->not->toContain($secret);
+});
+
+// --- Audit retention: evidence must never silently disappear ---
+
+it('refuses to delete a PaymentAttempt that has recovery audit history', function () {
+    $admin = Admin::factory()->create();
+    $order = recoveryOrder('20.00');
+    $attempt = recoveryOrphanedAttempt($order);
+
+    $attempt->recoveryActions()->create([
+        'admin_id' => $admin->id,
+        'action' => 'retry_recovery',
+        'outcome' => 'skipped',
+        'detail' => null,
+    ]);
+
+    expect(fn () => $attempt->delete())->toThrow(\Illuminate\Database\QueryException::class);
+
+    expect(PaymentAttempt::find($attempt->id))->not->toBeNull()
+        ->and(PaymentRecoveryAction::where('payment_attempt_id', $attempt->id)->count())->toBe(1);
+});
+
+// --- Crash-durable audit: the "started" row survives even if the operation never finishes ---
+
+it('leaves a durable "started" audit row even if the recovery operation crashes before it can be finished', function () {
+    $admin = Admin::factory()->create();
+    $order = recoveryOrder('20.00');
+    $attempt = recoveryOrphanedAttempt($order);
+
+    // Simulates the process dying (or an unexpected bug) between the audit
+    // insert and the provider call actually completing — recover() itself
+    // normally never lets an exception escape (it catches Throwable
+    // internally), so this forces the one genuine "crash mid-operation"
+    // shape: something throws after startAction() already committed.
+    $this->mock(PaymentAttemptRecoveryService::class, function ($mock) {
+        $mock->shouldReceive('recover')->once()->andThrow(new RuntimeException('simulated crash mid-recovery'));
+    });
+
+    $this->withoutExceptionHandling();
+
+    $threw = false;
+
+    try {
+        $this->actingAs($admin, 'admin')->post(route('admin.payments.recovery.retry', $attempt));
+    } catch (RuntimeException $e) {
+        $threw = true;
+        expect($e->getMessage())->toBe('simulated crash mid-recovery');
+    }
+
+    expect($threw)->toBeTrue('Expected the simulated crash to propagate out of the request.');
+
+    $record = PaymentRecoveryAction::where('payment_attempt_id', $attempt->id)->firstOrFail();
+
+    expect($record->outcome)->toBe('started')
+        ->and($record->detail)->toBeNull()
+        ->and($record->admin_id)->toBe($admin->id)
+        ->and($record->action)->toBe('retry_recovery');
+});
+
+// --- Manual recovery must never be looser than automatic reconciliation ---
+
+it('rejects manual recovery of a fresh pending attempt still within the automatic reconciliation window', function () {
+    $admin = Admin::factory()->create();
+    $order = recoveryOrder('20.00');
+    $attempt = recoveryOrphanedAttempt($order, ageMinutes: 1); // fresh — well under the 5-minute stale-after window
+
+    $fakeClient = new FakeStripeHttpClient(['id' => 'pi_should_not_be_called']);
+    ApiRequestor::setHttpClient($fakeClient);
+
+    $this->actingAs($admin, 'admin')
+        ->get(route('admin.payments.recovery.show', $attempt))
+        ->assertOk()
+        ->assertInertia(fn ($page) => $page->where('can_retry', false));
+
+    $this->actingAs($admin, 'admin')
+        ->post(route('admin.payments.recovery.retry', $attempt))
+        ->assertForbidden();
+
+    expect($fakeClient->requests)->toHaveCount(0)
+        ->and($attempt->fresh()->status)->toBe(PaymentAttemptStatus::Pending)
+        ->and($attempt->fresh()->recovery_attempts)->toBe(0)
+        ->and($attempt->fresh()->provider_reference)->toBeNull()
+        ->and(PaymentRecoveryAction::count())->toBe(0)
+        ->and($order->store->wallets()->first()->fresh()->balance)->toBe('0.00');
+});
+
+it('allows manual recovery once a pending attempt reaches the stale-after boundary', function () {
+    $admin = Admin::factory()->create();
+    $order = recoveryOrder('20.00');
+    $attempt = recoveryOrphanedAttempt($order, ageMinutes: PaymentRecoveryPolicy::STALE_AFTER_MINUTES);
+
+    $this->actingAs($admin, 'admin')
+        ->get(route('admin.payments.recovery.show', $attempt))
+        ->assertOk()
+        ->assertInertia(fn ($page) => $page->where('can_retry', true));
 });

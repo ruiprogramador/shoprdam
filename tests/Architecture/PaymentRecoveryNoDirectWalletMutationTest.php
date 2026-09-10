@@ -13,6 +13,7 @@ it('never lets the admin payment recovery path reference a Wallet-mutating class
         app_path('Http/Controllers/Admin/PaymentRecoveryController.php'),
         app_path('Domain/Payments/Services/PaymentAttemptRecoveryService.php'),
         app_path('Policies/PaymentRecoveryPolicy.php'),
+        app_path('Domain/Payments/RecoveryErrorFormatter.php'),
     ];
 
     // Anything that could move a balance or fabricate a settled state —

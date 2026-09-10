@@ -2,11 +2,12 @@
 
 namespace App\Http\Controllers\Admin;
 
-use App\Domain\Payments\Enums\PaymentAttemptStatus;
 use App\Domain\Payments\Enums\ProviderEventStatus;
 use App\Domain\Payments\Enums\RecoveryOutcome;
 use App\Domain\Payments\Models\PaymentAttempt;
 use App\Domain\Payments\Models\PaymentProviderEvent;
+use App\Domain\Payments\Models\PaymentRecoveryAction;
+use App\Domain\Payments\RecoveryErrorFormatter;
 use App\Domain\Payments\Services\PaymentAttemptRecoveryService;
 use App\Domain\Payments\Services\PaymentService;
 use App\Domain\Payments\Services\PaymentsHealthCheck;
@@ -25,8 +26,9 @@ use Throwable;
  * mutating action here is a direct call to a method the automatic side of
  * this domain already trusts:
  *
- * - a `pending` attempt is retried via
- *   App\Domain\Payments\Services\PaymentAttemptRecoveryService::recover(),
+ * - a `pending` attempt already at least as stale as automatic
+ *   reconciliation itself requires (see PaymentRecoveryPolicy::isStalePending())
+ *   is retried via App\Domain\Payments\Services\PaymentAttemptRecoveryService::recover(),
  *   the exact same lease/CAS-guarded algorithm
  *   App\Console\Commands\ReconcileOrphanedPaymentAttempts runs on a
  *   schedule — a manual click and the next scheduled tick can race safely
@@ -38,18 +40,33 @@ use Throwable;
  *   to be idempotent.
  *
  * Deliberately does NOT expose: marking a Payment paid, setting a
- * PaymentAttempt to succeeded, releasing a lease that hasn't expired, or
- * any other action not already backed by provider/domain evidence — see
- * PaymentRecoveryPolicy for the eligibility rule this controller re-checks
- * itself (defense in depth) before ever calling either method above. An
- * attempt that is `needs_attention` with no provider claim at all has no
- * safe action here on purpose: there is no provider evidence to retry
- * against, so this fails closed rather than guessing.
+ * PaymentAttempt to succeeded, releasing a lease that hasn't expired,
+ * manually recovering a *fresh* pending attempt that automatic
+ * reconciliation itself wouldn't touch yet, or any other action not already
+ * backed by provider/domain evidence — see PaymentRecoveryPolicy for the
+ * eligibility rule this controller re-checks itself (defense in depth)
+ * before ever calling either method above. An attempt that is
+ * `needs_attention` with no provider claim at all has no safe action here
+ * on purpose: there is no provider evidence to retry against, so this fails
+ * closed rather than guessing.
  *
- * Every invocation — successful or not — is written to
- * payment_recovery_actions (App\Domain\Payments\Models\PaymentRecoveryAction)
- * before the response is returned, and mirrored to the log, so a manual
- * recovery attempt is never a silent, unauditable action.
+ * Every invocation is durably audited *before* it runs, not after: retry()
+ * inserts a payment_recovery_actions row with outcome `started` first, then
+ * updates that same row once the operation finishes — see startAction()/
+ * finishAction(). If this process crashes between the two (or the recovery
+ * call itself never returns), the `started` row is still there as evidence
+ * an operator initiated this, exactly because it was its own committed
+ * INSERT, never held in a transaction together with the provider call that
+ * follows it.
+ *
+ * Nothing here ever persists or renders a raw exception message — every
+ * failure detail (the audit row's `detail`, a flash message) is built by
+ * App\Domain\Payments\RecoveryErrorFormatter from structured metadata only
+ * (provider, exception class, HTTP status, retryability); an
+ * already-stored last_recovery_error/last_replay_error is surfaced on the
+ * inspect page only as "an error is on record", never its content — see
+ * that formatter's own docblock for why a denylist over free-text provider
+ * messages was rejected as insufficiently fail-closed.
  */
 class PaymentRecoveryController extends Controller
 {
@@ -58,6 +75,9 @@ class PaymentRecoveryController extends Controller
      * option defaults exactly — an operator triggering an out-of-band
      * retry right now gets the same eligibility rules as the next scheduled
      * automatic run would apply to the same attempt, never looser ones.
+     * (--stale-after's default lives on PaymentRecoveryPolicy instead,
+     * since the policy — not this controller — is what decides whether a
+     * `pending` attempt is eligible at all.)
      */
     private const MAX_ATTEMPTS = 5;
 
@@ -104,7 +124,7 @@ class PaymentRecoveryController extends Controller
                 'status' => $attempt->status->value,
                 'provider_reference' => $attempt->provider_reference,
                 'recovery_attempts' => $attempt->recovery_attempts,
-                'last_recovery_error' => $attempt->last_recovery_error,
+                'has_last_recovery_error' => RecoveryErrorFormatter::hasStoredMessage($attempt->last_recovery_error),
                 'last_attempted_at' => $attempt->last_attempted_at?->toIso8601String(),
                 'locked_until' => $attempt->locked_until?->toIso8601String(),
                 'created_at' => $attempt->created_at->toIso8601String(),
@@ -130,12 +150,15 @@ class PaymentRecoveryController extends Controller
 
         // Defense in depth — PaymentRecoveryPolicy::retry() already checked
         // this; never trust a single check for a mutating financial-adjacent
-        // action. Re-fetches fresh so a status that changed between the
-        // authorize() call above and here (e.g. a concurrent webhook
-        // settling it) is what this decision is actually made against.
+        // action. Re-fetches fresh and re-runs the SAME policy rule (never a
+        // hand-rolled re-derivation of it) so a status that changed between
+        // the authorizeAdmin() call above and here (e.g. a concurrent
+        // webhook settling it, or the attempt aging past its own
+        // --stale-after window mid-request) is what this decision is
+        // actually made against.
         $attempt = $attempt->fresh();
 
-        if ($attempt->status === PaymentAttemptStatus::Pending) {
+        if ($this->policy->isStalePending($attempt)) {
             return $this->retryPendingAttempt($attempt, $admin);
         }
 
@@ -148,9 +171,15 @@ class PaymentRecoveryController extends Controller
 
     private function retryPendingAttempt(PaymentAttempt $attempt, Admin $admin): RedirectResponse
     {
+        $record = $this->startAction($attempt, $admin, 'retry_recovery');
+
         $result = $this->recovery->recover($attempt, self::MAX_ATTEMPTS, self::MAX_AGE_MINUTES, self::LEASE_TIMEOUT_MINUTES);
 
-        $this->recordAction($attempt, $admin, 'retry_recovery', $this->outcomeLabel($result->outcome), $result->exception?->getMessage());
+        $summary = $result->exception !== null
+            ? RecoveryErrorFormatter::summarizeForAudit($result->exception, $attempt->provider, $result->retryable)
+            : null;
+
+        $this->finishAction($record, $this->outcomeLabel($result->outcome), $summary);
 
         $route = redirect()->route('admin.payments.recovery.show', $attempt);
 
@@ -158,26 +187,30 @@ class PaymentRecoveryController extends Controller
             RecoveryOutcome::Recovered => $route->with('success', 'Recovered — the attempt is now claimed.'),
             RecoveryOutcome::Skipped => $route->with('info', 'Another process is already handling this attempt right now — nothing to do.'),
             RecoveryOutcome::AgeExceeded => $route->with('error', 'This attempt exceeded the safe recovery window and was marked needs_attention.'),
-            RecoveryOutcome::NeedsAttention => $route->with('error', "Recovery failed and needs attention: {$result->exception?->getMessage()}"),
-            RecoveryOutcome::RetryPending => $route->with('info', "Recovery failed but is retryable — it will be tried again automatically: {$result->exception?->getMessage()}"),
+            RecoveryOutcome::NeedsAttention => $route->with('error', "Recovery failed and needs attention: {$summary}"),
+            RecoveryOutcome::RetryPending => $route->with('info', "Recovery failed but is retryable — it will be tried again automatically: {$summary}"),
             RecoveryOutcome::AlreadyProgressed => $route->with('info', 'This attempt had already moved past pending before this retry ran — nothing was overwritten.'),
         };
     }
 
     private function replayClaimedAttempt(PaymentAttempt $attempt, Admin $admin): RedirectResponse
     {
+        $record = $this->startAction($attempt, $admin, 'replay_events');
+
         try {
             $this->paymentService->finalizeAttempt($attempt);
 
-            $this->recordAction($attempt, $admin, 'replay_events', 'replayed', null);
+            $this->finishAction($record, 'replayed', null);
 
             return redirect()->route('admin.payments.recovery.show', $attempt)
                 ->with('success', 'Replayed any pending provider events for this attempt.');
         } catch (Throwable $e) {
-            $this->recordAction($attempt, $admin, 'replay_events', 'replay_failed', $e->getMessage());
+            $summary = RecoveryErrorFormatter::summarizeForAudit($e, $attempt->provider);
+
+            $this->finishAction($record, 'replay_failed', $summary);
 
             return redirect()->route('admin.payments.recovery.show', $attempt)
-                ->with('error', "Replay failed: {$e->getMessage()}");
+                ->with('error', "Replay failed: {$summary}");
         }
     }
 
@@ -198,27 +231,49 @@ class PaymentRecoveryController extends Controller
                 'id' => $event->id,
                 'event_type' => $event->event_type,
                 'replay_attempts' => $event->replay_attempts,
-                'last_replay_error' => $event->last_replay_error,
+                'has_last_replay_error' => RecoveryErrorFormatter::hasStoredMessage($event->last_replay_error),
                 'created_at' => $event->created_at->toIso8601String(),
             ])
             ->all();
     }
 
-    /** The single write path for payment_recovery_actions — every retry()/replay call goes through here, success or failure. */
-    private function recordAction(PaymentAttempt $attempt, Admin $admin, string $action, string $outcome, ?string $detail): void
+    /**
+     * Inserts the audit row *before* any recovery/replay operation runs, in
+     * its own committed statement — deliberately not wrapped in a
+     * transaction together with what follows, and never spanning the
+     * provider HTTP call recover()/finalizeAttempt() may make. If this
+     * process crashes (or the provider call hangs) before finishAction()
+     * ever runs, this `started` row is what proves an operator initiated
+     * the action — see the class docblock.
+     */
+    private function startAction(PaymentAttempt $attempt, Admin $admin, string $action): PaymentRecoveryAction
     {
-        $attempt->recoveryActions()->create([
+        $record = $attempt->recoveryActions()->create([
             'admin_id' => $admin->id,
             'action' => $action,
-            'outcome' => $outcome,
-            'detail' => $detail,
+            'outcome' => 'started',
+            'detail' => null,
         ]);
 
-        logger()->info('Admin payment recovery action.', [
+        logger()->info('Admin payment recovery action started.', [
+            'payment_recovery_action_id' => $record->id,
             'payment_attempt_id' => $attempt->id,
             'payment_id' => $attempt->payment_id,
             'admin_id' => $admin->id,
             'action' => $action,
+        ]);
+
+        return $record;
+    }
+
+    /** Updates the same row startAction() created, once the operation's real outcome is known. */
+    private function finishAction(PaymentRecoveryAction $record, string $outcome, ?string $detail): void
+    {
+        $record->update(['outcome' => $outcome, 'detail' => $detail]);
+
+        logger()->info('Admin payment recovery action finished.', [
+            'payment_recovery_action_id' => $record->id,
+            'payment_attempt_id' => $record->payment_attempt_id,
             'outcome' => $outcome,
         ]);
     }
