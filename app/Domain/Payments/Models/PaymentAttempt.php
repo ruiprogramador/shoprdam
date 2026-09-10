@@ -5,6 +5,7 @@ namespace App\Domain\Payments\Models;
 use App\Domain\Payments\Enums\PaymentAttemptStatus;
 use Illuminate\Database\Eloquent\Model;
 use Illuminate\Database\Eloquent\Relations\BelongsTo;
+use Illuminate\Database\Eloquent\Relations\HasMany;
 
 /**
  * One attempt to satisfy a Payment through a specific provider/method.
@@ -44,5 +45,11 @@ class PaymentAttempt extends Model
     public function payment(): BelongsTo
     {
         return $this->belongsTo(Payment::class);
+    }
+
+    /** Audit trail of admin-triggered manual recovery — see PaymentRecoveryAction. */
+    public function recoveryActions(): HasMany
+    {
+        return $this->hasMany(PaymentRecoveryAction::class)->orderBy('created_at', 'desc');
     }
 }
