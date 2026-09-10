@@ -406,6 +406,47 @@ it('rejects invalid CLI options without touching any attempt or calling Stripe',
     '--max-age not greater than --stale-after' => [['--stale-after' => 10, '--max-age' => 10], '--max-age (10) must be greater than --stale-after (10)'],
 ]);
 
+/**
+ * `(int) 'abc'` is `0` — if any of these four options were still trusted
+ * through a bare cast, a malformed value would silently become a *valid*
+ * one (0 passes every ">= 0"/">= 1" check) instead of refusing to run. This
+ * is the concrete failure mode: --stale-after=abc silently becoming
+ * --stale-after=0 would broaden eligibility to every pending attempt ever
+ * created, including one that's brand new. See
+ * App\Console\Commands\ReconcileOrphanedPaymentAttempts::parseOption() and
+ * App\Domain\Payments\ConfigInteger.
+ */
+it('rejects a non-numeric CLI option instead of silently coercing it to zero and broadening eligibility', function (array $options, string $expectedMessage) {
+    $store = Store::factory()->create();
+    $order = Order::factory()->forStore($store)->amount('42.50')->create();
+
+    // A brand-new, definitely-not-stale attempt: if the malformed option
+    // were coerced to 0 instead of rejected, this attempt would become
+    // eligible and the provider would be called for it.
+    $attempt = createOrphanedPaymentAttempt($order, ageMinutes: 0);
+
+    $fakeClient = new FakeStripeHttpClient(['id' => 'pi_should_not_be_requested']);
+    ApiRequestor::setHttpClient($fakeClient);
+
+    $exitCode = Artisan::call('app:reconcile-orphaned-payment-attempts', $options);
+
+    expect($exitCode)
+        ->toBe(Command::INVALID)
+        ->and(Artisan::output())
+        ->toContain($expectedMessage)
+        ->and($fakeClient->requests)
+        ->toHaveCount(0)
+        ->and($attempt->fresh()->status)
+        ->toBe(PaymentAttemptStatus::Pending)
+        ->and($attempt->fresh()->recovery_attempts)
+        ->toBe(0);
+})->with([
+    'non-numeric --stale-after' => [['--stale-after' => 'abc'], "--stale-after must be an integer. Got: 'abc'."],
+    'decimal --max-attempts' => [['--max-attempts' => '2.5'], "--max-attempts must be an integer. Got: '2.5'."],
+    'empty --max-age' => [['--max-age' => ''], "--max-age must be an integer. Got: ''."],
+    'non-numeric --lease-timeout' => [['--lease-timeout' => 'soon'], "--lease-timeout must be an integer. Got: 'soon'."],
+]);
+
 it('replays a succeeded event that was queued before this attempt was recovered', function () {
     $store = Store::factory()->create();
     $wallet = $store->wallets()->first();

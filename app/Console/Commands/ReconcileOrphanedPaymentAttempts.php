@@ -2,17 +2,15 @@
 
 namespace App\Console\Commands;
 
-use App\Domain\Payments\Contracts\PaymentProviderContract;
-use App\Domain\Payments\Enums\FailureClass;
+use App\Domain\Payments\ConfigInteger;
 use App\Domain\Payments\Enums\PaymentAttemptStatus;
 use App\Domain\Payments\Enums\ProviderEventStatus;
-use App\Domain\Payments\Exceptions\PaymentAttemptMismatchException;
+use App\Domain\Payments\Enums\RecoveryOutcome;
 use App\Domain\Payments\Models\PaymentAttempt;
 use App\Domain\Payments\Models\PaymentProviderEvent;
-use App\Domain\Payments\PaymentProviderManager;
+use App\Domain\Payments\Services\PaymentAttemptRecoveryService;
 use App\Domain\Payments\Services\PaymentService;
 use Illuminate\Console\Command;
-use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Log;
 use Throwable;
 
@@ -33,25 +31,15 @@ use Throwable;
  * that arrived before this attempt was recovered — see
  * PaymentEventProcessor::replayUnmatchedEvents().
  *
- * Provider-agnostic by design: every attempt row carries its own
- * `provider`, resolved through PaymentProviderManager per attempt — this
- * command never imports a provider SDK type or hardcodes provider-specific
- * exception classes itself. Failure classification (retryable or not) is
- * delegated to PaymentProviderContract::classifyFailure() on whichever
- * provider the attempt belongs to.
- *
- * A PaymentAttempt's reconciliation lease (`locked_until`) is a separate
- * concern from its lifecycle `status` — see PaymentAttemptStatus. Every
- * state change this command makes — acquiring the lease, sending an
- * attempt straight to `needs_attention` for being too old, or recording a
- * recovery failure (see acquireLease()/markNeedsAttention()/recordRecoveryFailure())
- * — is a single conditional `UPDATE ... WHERE status = 'pending'`, never a
- * plain `$attempt->update(...)`, so two schedulers/workers racing on the
- * same attempt can't both call a provider for it, and this command can
- * never clobber a valid transition (e.g. finalizeAttempt() committing its
- * claim before a later step throws) that happened after this process last
- * read the row — the database, not a possibly-stale in-memory copy,
- * decides which UPDATE's WHERE still matches.
+ * The actual per-attempt recovery algorithm — lease acquisition, the
+ * provider retry, failure bookkeeping — lives in
+ * App\Domain\Payments\Services\PaymentAttemptRecoveryService, shared with
+ * App\Http\Controllers\Admin\PaymentRecoveryController's manual retry
+ * action; see that service's own docblock for the concurrency guarantee
+ * this split exists to preserve. This command is only ever responsible for
+ * *which* attempts are eligible (the two queries in handle()) and how to
+ * report each RecoveryResult — never how a single attempt's recovery
+ * itself is decided.
  *
  * Candidates are streamed via `chunkById()` rather than loaded with `get()`,
  * so this command's memory footprint doesn't grow with the number of
@@ -94,12 +82,21 @@ class ReconcileOrphanedPaymentAttempts extends Command
 
     protected $description = 'Recover Payments whose provider payment was created but never got a local claim or Wallet transaction';
 
-    public function handle(PaymentService $paymentService, PaymentProviderManager $providers): int
+    public function handle(PaymentService $paymentService, PaymentAttemptRecoveryService $recovery): int
     {
-        $staleAfter = (int) $this->option('stale-after');
-        $maxAttempts = (int) $this->option('max-attempts');
-        $maxAge = (int) $this->option('max-age');
-        $leaseTimeout = (int) $this->option('lease-timeout');
+        $staleAfter = $this->parseOption('stale-after');
+        $maxAttempts = $this->parseOption('max-attempts');
+        $maxAge = $this->parseOption('max-age');
+        $leaseTimeout = $this->parseOption('lease-timeout');
+
+        // Every option must at least parse as *some* integer before any of
+        // them are trusted for the range checks below — a bare `(int)` cast
+        // would silently turn '--stale-after=abc' into `0`, which passes
+        // "must be >= 0" and broadens provider-call eligibility to
+        // everything ever created instead of refusing to run.
+        if (in_array(null, [$staleAfter, $maxAttempts, $maxAge, $leaseTimeout], true)) {
+            return self::INVALID;
+        }
 
         if (! $this->validateOptions($staleAfter, $maxAttempts, $maxAge, $leaseTimeout)) {
             return self::INVALID;
@@ -117,11 +114,11 @@ class ReconcileOrphanedPaymentAttempts extends Command
             ->with('payment.order')
             ->chunkById(
                 $chunkSize,
-                function ($candidates) use (&$foundAny, $paymentService, $providers, $maxAttempts, $maxAge, $leaseTimeout) {
+                function ($candidates) use (&$foundAny, $recovery, $maxAttempts, $maxAge, $leaseTimeout) {
                     $foundAny = true;
 
                     foreach ($candidates as $attempt) {
-                        $this->processAttempt($attempt, $paymentService, $providers, $maxAttempts, $maxAge, $leaseTimeout);
+                        $this->processAttempt($attempt, $recovery, $maxAttempts, $maxAge, $leaseTimeout);
                     }
                 }
             );
@@ -162,6 +159,29 @@ class ReconcileOrphanedPaymentAttempts extends Command
     }
 
     /**
+     * Strictly parses one integer CLI option via App\Domain\Payments\ConfigInteger
+     * — the same fail-closed rule App\Console\Commands\PrunePaymentProviderEvents
+     * and App\Domain\Payments\Services\PaymentsHealthCheck already use for
+     * configurable integers, so "what counts as a valid value here" can't
+     * drift between them. `min: PHP_INT_MIN` deliberately accepts any
+     * well-formed integer, however out of range — validateOptions() below is
+     * solely responsible for range checks (and their exact, already-tested
+     * messages); this only ever catches "not an integer at all"
+     * ('abc', '3.5', '').
+     */
+    private function parseOption(string $name): ?int
+    {
+        $raw = $this->option($name);
+        $parsed = ConfigInteger::parse($raw, min: PHP_INT_MIN);
+
+        if ($parsed === null) {
+            $this->error("--{$name} must be an integer. Got: '".ConfigInteger::printable($raw)."'.");
+        }
+
+        return $parsed;
+    }
+
+    /**
      * `--stale-after` and `--lease-timeout` feed directly into `subMinutes()`
      * calls that decide which attempts get picked up and how long a lease
      * lasts; `--max-attempts` gates how many times a provider gets called
@@ -196,95 +216,80 @@ class ReconcileOrphanedPaymentAttempts extends Command
         return $errors === [];
     }
 
+    /**
+     * Delegates the actual recovery decision to
+     * PaymentAttemptRecoveryService::recover() and only ever renders its
+     * RecoveryResult — see that service's docblock for why the algorithm
+     * itself lives there instead of here.
+     */
     private function processAttempt(
         PaymentAttempt $attempt,
-        PaymentService $paymentService,
-        PaymentProviderManager $providers,
+        PaymentAttemptRecoveryService $recovery,
         int $maxAttempts,
         int $maxAge,
         int $leaseTimeout,
     ): void {
-        $ageMinutes = $attempt->created_at->diffInMinutes(now());
+        $result = $recovery->recover($attempt, $maxAttempts, $maxAge, $leaseTimeout);
 
-        if ($ageMinutes >= $maxAge) {
-            if (! $this->markNeedsAttention($attempt)) {
+        switch ($result->outcome) {
+            case RecoveryOutcome::Skipped:
                 // Another worker already leased or resolved this attempt.
                 return;
-            }
 
-            Log::error('Payment attempt reconciliation exceeded the safe recovery window, needs manual attention.', [
-                ...$this->logContext($attempt, ['age_minutes' => $ageMinutes, 'max_age' => $maxAge]),
-                'outcome' => 'needs_attention',
-            ]);
-            $this->error("Payment attempt #{$attempt->id} needs manual attention: older than the {$maxAge}-minute safe recovery window.");
+            case RecoveryOutcome::AgeExceeded:
+                Log::error('Payment attempt reconciliation exceeded the safe recovery window, needs manual attention.', [
+                    ...$this->logContext($attempt, ['age_minutes' => $result->ageMinutes, 'max_age' => $result->maxAge]),
+                    'outcome' => 'needs_attention',
+                ]);
+                $this->error("Payment attempt #{$attempt->id} needs manual attention: older than the {$result->maxAge}-minute safe recovery window.");
 
-            return;
-        }
+                return;
 
-        if (! $this->acquireLease($attempt, $leaseTimeout)) {
-            // Another worker already leased this attempt (or resolved it)
-            // between the query above and this UPDATE.
-            return;
-        }
+            case RecoveryOutcome::Recovered:
+                Log::info('Payment attempt reconciliation recovered.', [
+                    ...$this->logContext($attempt),
+                    'outcome' => 'claimed',
+                ]);
+                $this->info("Recovered payment attempt #{$attempt->id} ({$attempt->idempotency_key}).");
 
-        try {
-            $paymentService->finalizeAttempt($attempt);
+                return;
 
-            Log::info('Payment attempt reconciliation recovered.', [
-                ...$this->logContext($attempt),
-                'outcome' => 'claimed',
-            ]);
-            $this->info("Recovered payment attempt #{$attempt->id} ({$attempt->idempotency_key}).");
-        } catch (Throwable $e) {
-            $retryable = $this->isRetryable($e, $providers->driver($attempt->provider));
-            $recoveryAttempts = $attempt->recovery_attempts + 1;
-            $exhausted = $recoveryAttempts >= $maxAttempts;
-
-            $updated = $this->recordRecoveryFailure($attempt, $e, (! $retryable || $exhausted)
-                ? ['status' => PaymentAttemptStatus::NeedsAttention, 'locked_until' => null]
-                // Releases the lease this run took via acquireLease() above,
-                // so a later run's --stale-after query can pick it up
-                // again (created_at, which that query filters on, is
-                // unchanged).
-                : ['locked_until' => null]);
-
-            if (! $updated) {
+            case RecoveryOutcome::AlreadyProgressed:
                 // finalizeAttempt() actually committed its claim (status is
                 // no longer `pending`) before this exception was thrown —
                 // e.g. its post-claim replayUnmatchedEvents() step failed.
                 // The attempt already moved on to a real, valid state;
-                // overwriting it here (and recording a misleading
-                // recovery_attempts/last_recovery_error against an attempt
-                // that didn't actually fail to recover) would silently
-                // clobber that transition. Leave it untouched.
+                // overwriting it here would silently clobber that
+                // transition. Leave it untouched.
                 Log::warning('Payment attempt reconciliation raised after the attempt had already left pending; leaving its real state untouched.', [
-                    ...$this->logContext($attempt, ['exception' => $e::class]),
+                    ...$this->logContext($attempt, ['exception' => $result->exception::class]),
                     'outcome' => 'left_as_is',
                 ]);
-                $this->error("Payment attempt #{$attempt->id} already progressed past pending before this error; not overwriting its state ({$e->getMessage()}).");
+                $this->error("Payment attempt #{$attempt->id} already progressed past pending before this error; not overwriting its state ({$result->exception->getMessage()}).");
 
                 return;
-            }
 
-            $context = $this->logContext($attempt, ['exception' => $e::class, 'recovery_attempts' => $recoveryAttempts]);
-
-            if (! $retryable || $exhausted) {
-                $reason = $retryable
-                    ? "exhausted retries ({$recoveryAttempts}/{$maxAttempts})"
-                    : 'hit a non-retryable error ('.$e::class.')';
+            case RecoveryOutcome::NeedsAttention:
+                $reason = $result->retryable
+                    ? "exhausted retries ({$result->recoveryAttempts}/{$result->maxAttempts})"
+                    : 'hit a non-retryable error ('.$result->exception::class.')';
 
                 Log::error("Payment attempt reconciliation {$reason}, needs manual attention.", [
-                    ...$context,
+                    ...$this->logContext($attempt, ['exception' => $result->exception::class, 'recovery_attempts' => $result->recoveryAttempts]),
                     'outcome' => 'needs_attention',
                 ]);
-                $this->error("Payment attempt #{$attempt->id} needs manual attention — {$reason}: {$e->getMessage()}");
-            } else {
+                $this->error("Payment attempt #{$attempt->id} needs manual attention — {$reason}: {$result->exception->getMessage()}");
+
+                return;
+
+            case RecoveryOutcome::RetryPending:
                 Log::warning('Payment attempt reconciliation failed, will retry.', [
-                    ...$context,
+                    ...$this->logContext($attempt, ['exception' => $result->exception::class, 'recovery_attempts' => $result->recoveryAttempts]),
                     'outcome' => 'retry_pending',
                 ]);
-                $this->error("Failed to recover payment attempt #{$attempt->id} (attempt {$recoveryAttempts}/{$maxAttempts}): {$e->getMessage()}");
-            }
+                $this->error("Failed to recover payment attempt #{$attempt->id} (attempt {$result->recoveryAttempts}/{$result->maxAttempts}): {$result->exception->getMessage()}");
+
+                return;
         }
     }
 
@@ -321,31 +326,6 @@ class ReconcileOrphanedPaymentAttempts extends Command
     }
 
     /**
-     * Applies this recovery failure's bookkeeping and status/lease change in
-     * one atomic conditional UPDATE, guarded by the same `WHERE status =
-     * 'pending'` invariant as acquireLease()/markNeedsAttention() (see the
-     * class docblock) — never a plain `$attempt->update(...)`. Returns
-     * whether this call actually matched the row; false means the attempt's
-     * real status had already moved past `pending` by the time this ran, and
-     * nothing was written.
-     *
-     * @param  array<string, mixed>  $statusChanges  extra columns beyond the shared recovery bookkeeping ones
-     */
-    private function recordRecoveryFailure(PaymentAttempt $attempt, Throwable $e, array $statusChanges): bool
-    {
-        $affected = PaymentAttempt::where('id', $attempt->id)
-            ->where('status', PaymentAttemptStatus::Pending)
-            ->update([
-                ...$statusChanges,
-                'recovery_attempts' => DB::raw('recovery_attempts + 1'),
-                'last_attempted_at' => now(),
-                'last_recovery_error' => $e->getMessage(),
-            ]);
-
-        return $affected === 1;
-    }
-
-    /**
      * @param  array<string, mixed>  $extra
      * @return array<string, mixed>
      */
@@ -361,60 +341,5 @@ class ReconcileOrphanedPaymentAttempts extends Command
             'recovery_attempts' => $attempt->recovery_attempts,
             ...$extra,
         ];
-    }
-
-    /**
-     * Atomically acquires (or renews, if already expired) the reconciliation
-     * lease on one attempt, re-checking its eligibility against the
-     * database's *current* state rather than the possibly-stale copy this
-     * process read earlier. Returns whether this call was the one that won it.
-     */
-    private function acquireLease(PaymentAttempt $attempt, int $leaseTimeout): bool
-    {
-        $affected = PaymentAttempt::where('id', $attempt->id)
-            ->where('status', PaymentAttemptStatus::Pending)
-            ->where(function ($query) {
-                $query->whereNull('locked_until')->orWhere('locked_until', '<=', now());
-            })
-            ->update(['locked_until' => now()->addMinutes($leaseTimeout), 'last_attempted_at' => now()]);
-
-        if ($affected === 1) {
-            $attempt->locked_until = now()->addMinutes($leaseTimeout);
-
-            return true;
-        }
-
-        return false;
-    }
-
-    private function markNeedsAttention(PaymentAttempt $attempt): bool
-    {
-        $affected = PaymentAttempt::where('id', $attempt->id)
-            ->where('status', PaymentAttemptStatus::Pending)
-            ->where(function ($query) {
-                $query->whereNull('locked_until')->orWhere('locked_until', '<=', now());
-            })
-            ->update(['status' => PaymentAttemptStatus::NeedsAttention, 'locked_until' => null]);
-
-        return $affected === 1;
-    }
-
-    /**
-     * A definitive rejection (bad credentials, a malformed request, a
-     * declined card, a mismatched provider payment) will fail identically
-     * on every retry — burning through `--max-attempts` against it only
-     * delays `needs_attention` and wastes provider calls.
-     * PaymentAttemptMismatchException is a domain-level, provider-agnostic
-     * concern (see App\Domain\Payments\Services\PaymentService), checked
-     * before ever asking the provider; everything else is delegated to
-     * that provider's own classifyFailure().
-     */
-    private function isRetryable(Throwable $e, PaymentProviderContract $provider): bool
-    {
-        if ($e instanceof PaymentAttemptMismatchException) {
-            return false;
-        }
-
-        return $provider->classifyFailure($e) === FailureClass::Retryable;
     }
 }

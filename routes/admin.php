@@ -11,6 +11,7 @@ use App\Http\Controllers\Admin\Auth\RegisteredUserController;
 use App\Http\Controllers\Admin\Auth\VerifyEmailController;
 use App\Http\Controllers\Admin\ProfileController;
 use App\Http\Controllers\Admin\KycController;
+use App\Http\Controllers\Admin\PaymentRecoveryController;
 use App\Http\Controllers\Admin\TranslationController;
 use Illuminate\Support\Facades\Route;
 use Inertia\Inertia;
@@ -90,6 +91,15 @@ Route::middleware('auth:admin')
             Route::post('/{kyc}/review', [KycController::class, 'review'])->name('review');
             // Route::post('/{kyc}/approve', [KycController::class, 'approve'])->name('approve');
             // Route::post('/{kyc}/reject', [KycController::class, 'reject'])->name('reject');
+        });
+
+        // Admin Payment Recovery Routes — narrow, audited, read-mostly recovery
+        // tooling over the existing payments domain (see
+        // App\Http\Controllers\Admin\PaymentRecoveryController's own docblock).
+        Route::prefix('payments/recovery')->name('payments.recovery.')->group(function () {
+            Route::get('/', [PaymentRecoveryController::class, 'index'])->name('index');
+            Route::get('/{attempt}', [PaymentRecoveryController::class, 'show'])->name('show');
+            Route::post('/{attempt}/retry', [PaymentRecoveryController::class, 'retry'])->name('retry');
         });
 
         // Admin Translation Management Routes
