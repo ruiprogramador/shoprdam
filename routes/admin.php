@@ -12,6 +12,7 @@ use App\Http\Controllers\Admin\Auth\VerifyEmailController;
 use App\Http\Controllers\Admin\ProfileController;
 use App\Http\Controllers\Admin\KycController;
 use App\Http\Controllers\Admin\PaymentRecoveryController;
+use App\Http\Controllers\Admin\PayoutRecoveryController;
 use App\Http\Controllers\Admin\TranslationController;
 use Illuminate\Support\Facades\Route;
 use Inertia\Inertia;
@@ -100,6 +101,14 @@ Route::middleware('auth:admin')
             Route::get('/', [PaymentRecoveryController::class, 'index'])->name('index');
             Route::get('/{attempt}', [PaymentRecoveryController::class, 'show'])->name('show');
             Route::post('/{attempt}/retry', [PaymentRecoveryController::class, 'retry'])->name('retry');
+        });
+
+        // Admin Payout Recovery Routes — the only place an operator's manual
+        // SEPA-transfer confirmation reaches the payout domain (see
+        // App\Http\Controllers\Admin\PayoutRecoveryController's own docblock).
+        Route::prefix('payouts/recovery')->name('payouts.recovery.')->group(function () {
+            Route::post('/{attempt}/retry', [PayoutRecoveryController::class, 'retry'])->name('retry');
+            Route::post('/{attempt}/confirm', [PayoutRecoveryController::class, 'confirm'])->name('confirm');
         });
 
         // Admin Translation Management Routes

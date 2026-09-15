@@ -4,6 +4,7 @@ use App\Providers\AppServiceProvider;
 use App\Providers\EventServiceProvider;
 use App\Providers\HorizonServiceProvider;
 use App\Providers\PaymentServiceProvider;
+use App\Providers\PayoutServiceProvider;
 use App\Providers\TranslationServiceProvider;
 
 return [
@@ -12,4 +13,5 @@ return [
     EventServiceProvider::class,
     TranslationServiceProvider::class,
     PaymentServiceProvider::class,
+    PayoutServiceProvider::class,
 ];
