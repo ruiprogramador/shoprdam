@@ -74,7 +74,7 @@ it('never lets the registry silently drop a critical known-limitation entry', fu
         'EasyPay refunds are not supported',
         'precision` (for zero-decimal currencies',
         'No payout-attempt health/observability command exists',
-        'CROSS-14 is not uniformly true',
+        'no self-service path to close their account at all, ever',
     ];
 
     $missing = array_values(array_filter(
@@ -85,14 +85,33 @@ it('never lets the registry silently drop a critical known-limitation entry', fu
     expect($missing)->toBe([]);
 });
 
-it('never lets the critical cascade-deletion finding disappear from the failure model without a resolution', function () {
+it('never lets the critical cascade-deletion finding disappear from the failure model, or its resolution get silently unmarked', function () {
     $failureModel = file_get_contents(base_path('docs/financial/FAILURE-MODEL.md'));
 
-    // This test exists to force a deliberate decision, not to lock the
-    // finding in place forever: once harden/financial-history-cascade-protection
-    // actually closes the gap, this test (and the finding's own wording)
-    // should be updated together — silently deleting the paragraph without
-    // fixing the schema is what this guards against, not the eventual fix.
+    // harden/financial-history-cascade-protection closed this gap — see
+    // INVARIANTS.md's CROSS-14 (now ENFORCED) and the two tests named
+    // below. This test's job changed accordingly: the historical finding
+    // itself must stay documented (deleting the paragraph instead of
+    // actually keeping the fix in place is exactly what this guards
+    // against), and now *also* its RESOLVED status must stay explicit — a
+    // future edit reverting the schema to cascadeOnDelete() without
+    // updating this doc back to describing an active gap would otherwise
+    // leave the contract silently lying about being safe.
     expect($failureModel)->toContain('Critical finding — financial history is cascade-deletable')
-        ->and($failureModel)->toContain('harden/financial-history-cascade-protection');
+        ->and($failureModel)->toContain('harden/financial-history-cascade-protection')
+        ->and($failureModel)->toContain('Status: RESOLVED')
+        ->and($failureModel)->toContain('## Resolution')
+        ->and($failureModel)->toContain('FinancialHistoryCascadeMigrationSafetyTest')
+        ->and($failureModel)->toContain('ProfileAccountDeletionFinancialHistoryTest');
+});
+
+it('keeps CROSS-14 documented as ENFORCED, never silently reverted to PARTIALLY ENFORCED', function () {
+    $registry = file_get_contents(base_path('docs/financial/INVARIANTS.md'));
+
+    expect(preg_match('/\| CROSS-14 \|[^\n]*\|/', $registry, $matches))->toBe(1, 'Expected to find the CROSS-14 row in INVARIANTS.md.');
+
+    $row = $matches[0];
+
+    expect($row)->toContain('**ENFORCED**')
+        ->and($row)->not->toContain('PARTIALLY ENFORCED');
 });

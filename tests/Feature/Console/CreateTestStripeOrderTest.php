@@ -64,7 +64,7 @@ it('creates an order and a stripe payment intent for a store', function () {
         ->toBe((string) $order->id);
 });
 
-it('deletes the test order when the Stripe API call fails', function () {
+it('preserves the order and its payment when the Stripe API call fails, since a Payment already exists by then', function () {
     $store = Store::factory()->create();
 
     $fakeClient = new FakeStripeHttpClient(
@@ -79,10 +79,19 @@ it('deletes the test order when the Stripe API call fails', function () {
         'amount' => '25.00',
     ])
         ->assertExitCode(1)
-        ->expectsOutputToContain('Failed to create the Stripe payment');
+        ->expectsOutputToContain('Failed to create the Stripe payment')
+        ->expectsOutputToContain('left in place — financial history now exists for it');
 
-    expect(Order::where('store_id', $store->id)->exists())
-        ->toBeFalse()
+    $order = Order::where('store_id', $store->id)->firstOrFail();
+
+    // PaymentService::findOrCreatePayment() already created the Payment row
+    // before Stripe was ever called — deleting the Order now would destroy
+    // that financial history (payments.order_id is restrictOnDelete()), so
+    // this command must leave both in place instead of cleaning them up.
+    expect(Payment::where('order_id', $order->id)->exists())
+        ->toBeTrue()
+        // No claim/Wallet transaction was ever written — the failure
+        // happened before that step, so there's nothing to reverse.
         ->and(StoreWalletTransaction::where('referenceable_type', Order::class)->exists())
         ->toBeFalse();
 });

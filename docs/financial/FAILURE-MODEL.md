@@ -42,65 +42,113 @@ Processor. This holds for both domains; CROSS-09 formalizes it.
 
 ## Critical finding — financial history is cascade-deletable through a live, unguarded path
 
-Discovered during this branch's forensic audit (Phase 1), not introduced by
-it, and **not fixed here** per this branch's own scope rules.
+**Status: RESOLVED by `harden/financial-history-cascade-protection`.** This
+section is kept as a historical record of what was found and how — do not
+read the reproduction below as still live; see "Resolution" at the end for
+what closed it, and CROSS-14 in `INVARIANTS.md` (now **ENFORCED**) for the
+current guarantee.
 
-**Reproduction:**
+Discovered during an earlier branch's forensic audit (Phase 1 of that
+branch's own design record), not introduced by it, and deliberately not
+fixed in that branch, per its own scope rules — the paragraph below is
+preserved as it was written then.
+
+**Reproduction (as it stood before the fix below):**
 1. A vendor (any `User` with `userType` `vendor`, owning a `Store`) visits
    their profile settings and submits the standard "delete my account" form
    (`Vendor/Profile/Edit`, wired to `profile.destroy`).
-2. `App\Http\Controllers\User\ProfileController::destroy()` runs
+2. `App\Http\Controllers\User\ProfileController::destroy()` ran
    `$user->delete()` — a real, hard `DELETE` (`App\Models\User` has no
-   `SoftDeletes`).
-3. `stores.user_id` is `cascadeOnDelete()` (`database/migrations/2026_07_02_063758_create_stores_table.php`)
-   → the `Store` row is hard-deleted at the database level, **bypassing**
-   `Store`'s own `SoftDeletes` trait entirely (a DB-level FK cascade never
-   goes through Eloquent model events).
-4. `store_wallets.store_id` is `cascadeOnDelete()`
+   `SoftDeletes`) — with no check beforehand.
+3. `stores.user_id` was `cascadeOnDelete()` (`database/migrations/2026_07_02_063758_create_stores_table.php`)
+   → the `Store` row would be hard-deleted at the database level,
+   **bypassing** `Store`'s own `SoftDeletes` trait entirely (a DB-level FK
+   cascade never goes through Eloquent model events).
+4. `store_wallets.store_id` was `cascadeOnDelete()`
    (`database/migrations/2026_07_02_063759_create_store_wallets_table.php`)
-   → every `StoreWallet` the store owned is hard-deleted.
-5. `store_wallet_transactions.store_wallet_id` is `cascadeOnDelete()`
+   → every `StoreWallet` the store owned would be hard-deleted.
+5. `store_wallet_transactions.store_wallet_id` was `cascadeOnDelete()`
    (`database/migrations/2026_07_02_065351_create_store_wallet_transactions_table.php`)
    → **every ledger row that store ever had — every sale, refund,
-   commission, withdrawal, reversal — is permanently destroyed.**
-6. `orders.store_id` is also `cascadeOnDelete()`
+   commission, withdrawal, reversal — would be permanently destroyed.**
+6. `orders.store_id` was also `cascadeOnDelete()`
    (`database/migrations/...create_orders_table.php`), and `payments.order_id`
-   / `payment_attempts.payment_id` are also `cascadeOnDelete()` — so the
-   Payments-side audit trail is destroyed too, for any attempt that never
-   happened to accumulate a `payment_recovery_actions` row (which alone
-   `restrictOnDelete()`s).
+   / `payment_attempts.payment_id` were also `cascadeOnDelete()` — so the
+   Payments-side audit trail would be destroyed too, for any attempt that
+   never happened to accumulate a `payment_recovery_actions` row (which
+   alone `restrictOnDelete()`d).
 
-**The one thing that stops this today** is `payouts.store_id`, which is
-`restrictOnDelete()`. If the store has *any* Payout history, step 3 fails
-outright with an unhandled `QueryException` — meaning the account-deletion
-feature **crashes** for any vendor who ever requested a payout, instead of
-silently destroying history. Neither outcome is acceptable: silent data loss
-for stores with no payout history, or an unhandled 500 for stores with any.
+**The one thing that stopped this before the fix** was `payouts.store_id`,
+which was already `restrictOnDelete()`. If the store had *any* Payout
+history, step 3 would fail outright with an unhandled `QueryException` —
+meaning the account-deletion feature would **crash** for any vendor who
+ever requested a payout, instead of silently destroying history. Neither
+outcome was acceptable: silent data loss for stores with no payout history,
+or an unhandled 500 for stores with any.
 
-**No guard exists.** `StoreObserver` only implements `creating`/`created`;
-there is no `deleting` hook, no balance check, no confirmation step beyond
+**No guard existed.** `StoreObserver` only implements `creating`/`created`;
+there was no `deleting` hook, no balance check, no confirmation step beyond
 re-entering the account password.
 
-**Impact:** total, irrecoverable loss of a store's financial ledger and
-payment history via a completely ordinary, already-shipped self-service
-action. Classified as the shoprdam equivalent of "known path to silent
-financial history deletion" — one of the explicit red-flag categories this
-branch was asked to watch for.
+**Impact (as it stood):** total, irrecoverable loss of a store's financial
+ledger and payment history via a completely ordinary, already-shipped
+self-service action. Classified as the shoprdam equivalent of "known path
+to silent financial history deletion" — one of the explicit red-flag
+categories the discovering branch was asked to watch for.
 
-**Invariant violated:** CROSS-14 ("Financial history is append-only and
-cannot disappear via operational cascade") — true for Payouts, **false**
-for Payments/Wallet.
+**Invariant violated (as it stood):** CROSS-14 ("Financial history is
+append-only and cannot disappear via operational cascade") — true for
+Payouts, false for Payments/Wallet.
 
-**Recommended follow-up branch:** `harden/financial-history-cascade-protection`
-— change `payments.order_id`, `payment_attempts.payment_id`,
-`orders.store_id`, `store_wallets.store_id`, and
-`store_wallet_transactions.store_wallet_id` to `restrictOnDelete()` (mirroring
-the pattern already proven in Payouts), and add an explicit, deliberate
-decision for what "delete my account" should do for a vendor with financial
-history (block it with a clear message, or soft-delete/anonymize while
-preserving the ledger — a product decision, not one this contract makes).
-This is deliberately **not** implemented in this branch (schema changes are
-out of scope here — see Phase 14).
+## Resolution
+
+`harden/financial-history-cascade-protection` closed this gap with two
+independent layers, deliberately not just one:
+
+1. **Database-level (the actual guarantee):**
+   `database/migrations/2026_09_16_180000_restrict_financial_history_cascades.php`
+   changes `payments.order_id`, `payment_attempts.payment_id`,
+   `orders.store_id`, `store_wallets.store_id`,
+   `store_wallet_transactions.store_wallet_id`, and `stores.user_id` to
+   `restrictOnDelete()` — mirroring the pattern already proven in Payouts.
+   This alone makes the cascade in steps 3–6 above impossible: the database
+   now refuses any of those deletes outright while financial-history
+   children still exist, the same way `payouts.store_id` already did.
+   Proven against the real migrated schema (`PRAGMA foreign_key_list`) by
+   `tests/Feature/Domain/Payments/PaymentsSchemaDeletePolicyTest`, and
+   proven safe to run against a database already holding real financial
+   history (existing rows survive, `down()`/`up()` genuinely flip the live
+   FK policy both ways) by
+   `tests/Feature/Domain/Payments/FinancialHistoryCascadeMigrationSafetyTest`.
+
+2. **Application-level (the deliberate product decision the earlier branch
+   left open):** `App\Http\Controllers\User\ProfileController::destroy()`
+   now refuses to delete a User who owns any Store — including a
+   soft-deleted one — *before* calling `$user->delete()` at all, returning
+   a normal validation-error redirect ("Your account cannot be deleted
+   while it owns a store. Please contact support.") instead of ever
+   reaching the database constraint. This means the DB-level fix above is a
+   genuine defense-in-depth backstop, not the only thing standing between a
+   vendor and either a 500 or a blocked action — the product chose **block,
+   always**, not soft-delete/anonymize (see `INVARIANTS.md`'s "Known
+   Non-Guarantees" for what that trade-off still doesn't offer). Proven for
+   a plain customer (unaffected), an empty Store, a soft-deleted-only
+   Store, and Stores with Wallet/ledger, Payment, Payout, and mixed
+   financial history, by
+   `tests/Feature/ProfileAccountDeletionFinancialHistoryTest` (scenarios
+   A1–A7).
+
+**What rolling this back would reopen:** running this migration's `down()`
+sets all six FKs back to `cascadeOnDelete()` — schema-only, it does not
+touch any existing row — but doing so genuinely restores the exact
+vulnerability reproduced above for any deletion performed afterward,
+regardless of the application-level guard still being in place (a
+deployment that rolled back the migration but kept the old
+`ProfileController` code, or any other future code path that calls
+`$user->delete()`/`$store->delete()` directly, would be exposed again).
+`FinancialHistoryCascadeMigrationSafetyTest` proves the round-trip is
+*data*-safe; it is not a claim that running with `down()` applied is an
+*operationally* safe state.
 
 ## Other known gaps in the failure model
 

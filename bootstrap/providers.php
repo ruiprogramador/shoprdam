@@ -5,6 +5,7 @@ use App\Providers\EventServiceProvider;
 use App\Providers\HorizonServiceProvider;
 use App\Providers\PaymentServiceProvider;
 use App\Providers\PayoutServiceProvider;
+use App\Providers\TestingDatabaseGuardServiceProvider;
 use App\Providers\TranslationServiceProvider;
 
 return [
@@ -14,4 +15,5 @@ return [
     TranslationServiceProvider::class,
     PaymentServiceProvider::class,
     PayoutServiceProvider::class,
+    TestingDatabaseGuardServiceProvider::class,
 ];
