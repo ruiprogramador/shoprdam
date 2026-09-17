@@ -8,6 +8,8 @@ use Illuminate\Foundation\Auth\User as Authenticatable;
 use Illuminate\Notifications\Notifiable;
 use App\Models\UserType;
 use App\Models\Kyc;
+use App\Models\Store;
+use Illuminate\Database\Eloquent\Relations\HasMany;
 use Illuminate\Database\Eloquent\Relations\HasOne;
 
 class User extends Authenticatable
@@ -55,6 +57,19 @@ class User extends Authenticatable
     public function userType()
     {
         return $this->belongsTo(UserType::class);
+    }
+
+    /**
+     * Every Store this user owns. Deliberately includes soft-deleted stores
+     * by default only where callers explicitly ask for it (see
+     * ProfileController::destroy(), which queries ->withTrashed()) — a
+     * soft-deleted Store still physically exists and still blocks hard
+     * User deletion via stores.user_id's restrictOnDelete() constraint, so
+     * the app-level check must see the same thing the database does.
+     */
+    public function stores(): HasMany
+    {
+        return $this->hasMany(Store::class);
     }
 
     public function hasRole($role)

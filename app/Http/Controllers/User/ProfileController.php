@@ -45,6 +45,15 @@ class ProfileController extends ProfileBaseController
 
     /**
      * Delete the user's account.
+     *
+     * A vendor (any user owning at least one Store, including a
+     * soft-deleted one, regardless of whether it has accumulated any
+     * financial history yet) can never self-service hard-delete their
+     * account: stores.user_id is restrictOnDelete() at the database level
+     * (see docs/financial/INVARIANTS.md CROSS-14), and this check exists so
+     * that constraint is never what the user "discovers" via a 500 — the
+     * decision is made here, before any mutation, not by catching a
+     * QueryException.
      */
     public function destroy(Request $request): RedirectResponse
     {
@@ -53,6 +62,12 @@ class ProfileController extends ProfileBaseController
         ]);
 
         $user = $request->user();
+
+        if ($user->stores()->withTrashed()->exists()) {
+            return Redirect::back()->withErrors([
+                'account' => __('Your account cannot be deleted while it owns a store. Please contact support.'),
+            ]);
+        }
 
         Auth::guard('web')->logout();
 

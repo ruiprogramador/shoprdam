@@ -2,11 +2,13 @@
 
 namespace App\Console\Commands;
 
+use App\Domain\Payments\Models\Payment;
 use App\Domain\Payments\Services\PaymentService;
 use App\Models\Order;
 use App\Models\OrderStatus;
 use App\Models\Store;
 use Illuminate\Console\Command;
+use Illuminate\Database\QueryException;
 
 /**
  * Manual, test-mode-only tool: creates a real Order + Stripe payment so the
@@ -84,11 +86,38 @@ class CreateTestStripeOrder extends Command
                 ? $paymentService->createOrphanedAttemptForTesting($order, 'stripe', 'card')->providerReference
                 : $paymentService->startAttempt($order, 'stripe', 'card')->provider_reference;
         } catch (\Throwable $e) {
-            // Stripe's side (if it got that far) can't be rolled back from here,
-            // but we can at least avoid leaving a dangling test Order behind.
-            $order->delete();
+            $this->error("Failed to create the Stripe payment for Order #{$orderId}: {$e->getMessage()}");
 
-            $this->error("Failed to create the Stripe payment for Order #{$orderId}, which was deleted: {$e->getMessage()}");
+            // Stripe's side (if it got that far) can't be rolled back from
+            // here, but we can at least avoid leaving a dangling test Order
+            // behind — as long as doing so wouldn't destroy financial
+            // history. PaymentService::startAttempt()/
+            // createOrphanedAttemptForTesting() both create the Order's
+            // Payment row (via findOrCreatePayment()) as their very first
+            // step, before ever calling the provider — so by the time this
+            // catch runs, a Payment almost always already exists for this
+            // Order, and payments.order_id is restrictOnDelete() (see
+            // docs/financial/INVARIANTS.md CROSS-14). Checking for that
+            // directly, rather than only discovering it via a
+            // QueryException, keeps cleanup deterministic and never trades
+            // away financial history just to tidy up a test order.
+            if (Payment::where('order_id', $orderId)->exists()) {
+                $this->error("Order #{$orderId} and its Payment record were left in place — financial history now exists for it, so this test order was not deleted automatically. Clean it up manually if needed.");
+            } else {
+                try {
+                    $order->delete();
+
+                    $this->error("Order #{$orderId} was deleted.");
+                } catch (QueryException $deleteException) {
+                    // Defensive last-resort boundary, not the normal way
+                    // this command discovers financial history: if the
+                    // database still refuses the delete for a reason the
+                    // check above didn't anticipate, say so plainly instead
+                    // of letting an unhandled exception crash the command.
+                    $this->error("Order #{$orderId} could not be deleted automatically because the database refused it: {$deleteException->getMessage()}");
+                }
+            }
+
             $this->error('If Stripe reports a payment was created despite this error, it may need manual cleanup on the Stripe dashboard.');
 
             return self::FAILURE;

@@ -55,7 +55,7 @@ branch after verifying each one against production code.
 | PAYOUT-15 | A crash at any point never permits double debit nor an unreconcilable state | ENFORCED | See `FAILURE-MODEL.md` crash matrix |
 | PAYOUT-16 | Controllers/admin/webhooks never alter the Wallet balance directly | ENFORCED | `PayoutRecoveryNoDirectWalletMutationTest` |
 | PAYOUT-17 | There is a single canonical payout settlement path | ENFORCED | Same architecture test, second assertion (`->reverse(` scan) |
-| PAYOUT-18 | Payout/attempt financial history is not deleted by accidental cascade | ENFORCED | `restrictOnDelete()` on every payout-related FK, verified against real `PRAGMA foreign_key_list` output by `PayoutSchemaDeletePolicyTest` — **this is the exact protection missing on the Payments/Wallet side, see CROSS-14** |
+| PAYOUT-18 | Payout/attempt financial history is not deleted by accidental cascade | ENFORCED | `restrictOnDelete()` on every payout-related FK, verified against real `PRAGMA foreign_key_list` output by `PayoutSchemaDeletePolicyTest` — the same pattern is now also proven on the Payments/Wallet side, see CROSS-14 |
 
 ## LEDGER-XX (preserved verbatim from `harden/wallet-ledger-invariants`)
 
@@ -87,7 +87,7 @@ branch after verifying each one against production code.
 | CROSS-11 | Currency A can never mutate a Wallet of currency B | `WalletTransactionService::record()` (explicit `StoreWallet` param) | ENFORCED | `WalletLedgerAuditorTest` "LEDGER-06: currency isolation" |
 | CROSS-12 | Controllers/admin/webhooks cannot write `wallet.balance` directly or fabricate an economic effect outside the canonical domain path | `WalletTransactionService` sole-writer design | ENFORCED | `WalletLedgerSingleWriterTest`, `PaymentRecoveryNoDirectWalletMutationTest`, `PayoutRecoveryNoDirectWalletMutationTest` |
 | CROSS-13 | A terminal succeeded cannot be resent/re-executed to duplicate an economic effect | `PaymentAttemptStatus`/`PayoutStatus` `isTerminal()` gates | ENFORCED | `PaymentServiceGatingTest`, `PayoutAttemptLifecycleTest` "refuses to create a new attempt for an already-terminal payout" |
-| CROSS-14 | Relevant financial history is append-only and cannot disappear via operational cascade | Payouts: `PayoutService`/migrations. Payments/Wallet: **nobody** | **PARTIALLY ENFORCED** | Payouts: `PayoutSchemaDeletePolicyTest` (real `PRAGMA` check). Payments/Wallet: **no protection — see `FAILURE-MODEL.md` "Critical finding"**. A vendor's self-service account deletion cascades through `stores.user_id` → `store_wallets.store_id` → `store_wallet_transactions.store_wallet_id`, all `cascadeOnDelete()`, permanently destroying the ledger. |
+| CROSS-14 | Relevant financial history is append-only and cannot disappear via operational cascade | Payouts: `PayoutService`/migrations. Payments/Wallet: `database/migrations/2026_09_16_180000_restrict_financial_history_cascades.php` (DB) + `App\Http\Controllers\User\ProfileController::destroy()` (app) | **ENFORCED** | DB-level: all six Payments/Wallet FKs (`payment_attempts.payment_id`, `payments.order_id`, `store_wallet_transactions.store_wallet_id`, `orders.store_id`, `store_wallets.store_id`, `stores.user_id`) are `restrictOnDelete()`, verified against real `PRAGMA foreign_key_list` output by `PaymentsSchemaDeletePolicyTest` (mirrors Payouts' own `PayoutSchemaDeletePolicyTest`). App-level: `ProfileController::destroy()` refuses to hard-delete a User who owns any Store — trashed or not — before any mutation, never surfacing the constraint as an unhandled `QueryException`; see `ProfileAccountDeletionFinancialHistoryTest` (scenarios A1–A7: no Store, empty Store, soft-deleted Store, Wallet/ledger history, Payment history, Payout history, and a mixed case). Migration safety (existing rows survive `down()`+`up()`, the live FK policy genuinely flips both ways) is proven — without touching a real database — by `FinancialHistoryCascadeMigrationSafetyTest`. Regression coverage against a future migration/model silently reopening this: `FinancialHistoryDeletePolicyTest`. See `FAILURE-MODEL.md`'s "Critical finding" for the original reproduction and its resolution, including what re-running the migration's `down()` would reopen. |
 
 ## Concurrency note (applies to every ENFORCED invariant above that cites a lock/CAS)
 
@@ -145,8 +145,23 @@ column exists" as "this is a supported feature":
 - **No payout-attempt health/observability command exists** — only
   `wallet:audit` (balance reconciliation) and `payments:health` (Payments
   only).
-- **CROSS-14 is not uniformly true** — see above. Do not assume Payments/
-  Wallet financial history is cascade-protected; it currently is not.
+- **A vendor who owns a Store has no self-service path to close their
+  account at all, ever** (CROSS-14's fix). `ProfileController::destroy()`
+  unconditionally blocks and points them at "contact support" — there is no
+  anonymize/soft-delete-while-preserving-the-ledger flow, no support-side
+  tool to resolve it, and no time bound. This is the deliberate, narrower
+  trade this branch made (block, never silently lose history) — see
+  `FAILURE-MODEL.md`'s "Critical finding" for why the alternative
+  (`stores.user_id`'s DB constraint alone, with no app-level check) would
+  instead have surfaced as an unhandled 500.
+- **Rolling back the CROSS-14 hardening migration
+  (`2026_09_16_180000_restrict_financial_history_cascades.php`) genuinely
+  reopens the original vulnerability** for any deletion performed after the
+  rollback — `down()` is schema-only (existing rows are never touched) but
+  is not itself a safe operational state to run in.
+  `FinancialHistoryCascadeMigrationSafetyTest` proves the round-trip is
+  data-safe; it is not a claim that `down()` is a state you should ever
+  deploy.
 
 ## Traceability — how to answer "where is this protected?"
 
@@ -165,4 +180,8 @@ listed once here rather than repeated per row:
 | Payouts domain never imports a concrete provider adapter | `tests/Architecture/PayoutsDomainBoundaryTest` |
 | Payout financial FKs restrict on delete, fail-closed on missing policy | `tests/Architecture/PayoutFinancialHistoryAppendOnlyTest` |
 | Payout financial FKs restrict on delete, verified against the real schema | `tests/Feature/Domain/Payouts/PayoutSchemaDeletePolicyTest` |
+| Payments/Wallet financial FKs restrict on delete, verified against the real schema | `tests/Feature/Domain/Payments/PaymentsSchemaDeletePolicyTest` |
+| Payments/Wallet financial FKs resist a future cascade regression / SoftDeletes substitute / direct truncate | `tests/Architecture/FinancialHistoryDeletePolicyTest` |
+| The CROSS-14 hardening migration is safe against a database already holding real financial history | `tests/Feature/Domain/Payments/FinancialHistoryCascadeMigrationSafetyTest` |
+| `ProfileController::destroy()` blocks account deletion for any Store owner before any mutation | `tests/Feature/ProfileAccountDeletionFinancialHistoryTest` |
 | This registry itself stays complete | `tests/Architecture/FinancialContractRegistryTest` (new, see below) |

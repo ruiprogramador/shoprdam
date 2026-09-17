@@ -140,25 +140,55 @@ create a `StoreWalletTransaction`; every mutating admin action is a call
 into a canonical domain service, proven by the two
 `*NoDirectWalletMutationTest` architecture tests.
 
-## 7. A critical, currently-live gap this contract surfaces (not fixes)
+## 7. Financial history's append-only guarantee is now uniform (closed by `harden/financial-history-cascade-protection`)
 
-**This architecture's append-only guarantee for financial history is not
-uniform.** The Payouts domain enforces it at the database level
+**This architecture's append-only guarantee for financial history now holds
+identically across Payouts and Payments/Wallet — it was not always true,
+and this section says so plainly rather than rewriting history.** The
+Payouts domain enforced it at the database level from its first migration
 (`restrictOnDelete()` on every FK in `payouts`/`payout_attempts`/
 `payout_recovery_actions`, verified by `tests/Feature/Domain/Payouts/PayoutSchemaDeletePolicyTest`
 against the real `PRAGMA foreign_key_list` output). **The Payments and
-Wallet domains do not**: `payments.order_id`, `payment_attempts.payment_id`,
-`orders.store_id`, `store_wallets.store_id`, and
-`store_wallet_transactions.store_wallet_id` are all `cascadeOnDelete()`, and
-a real, unguarded production code path — a vendor's own "delete my account"
-action (`App\Http\Controllers\User\ProfileController::destroy()`) — performs
-a hard `User::delete()` that cascades through `stores.user_id
+Wallet domains did not**, until this branch: `payments.order_id`,
+`payment_attempts.payment_id`, `orders.store_id`, `store_wallets.store_id`,
+and `store_wallet_transactions.store_wallet_id` were all
+`cascadeOnDelete()`, and a real, unguarded production code path — a
+vendor's own "delete my account" action
+(`App\Http\Controllers\User\ProfileController::destroy()`) — performed a
+hard `User::delete()` that cascaded through `stores.user_id
 cascadeOnDelete()` all the way down to permanently destroying that store's
-entire Wallet ledger. See `FAILURE-MODEL.md` §"Critical finding" and
-`INVARIANTS.md` CROSS-14 for the full evidence and reproduction. This
-document does not paper over it: CROSS-14 is recorded as **PARTIALLY
-ENFORCED**, not ENFORCED, and a dedicated hardening branch is recommended
-rather than fixed here.
+entire Wallet ledger. See `FAILURE-MODEL.md` §"Critical finding" (now
+marked **RESOLVED**, with the original reproduction preserved) and
+`INVARIANTS.md` CROSS-14 (now **ENFORCED**) for the full evidence.
+
+This branch closed the gap with two layers:
+
+- **Database:** `database/migrations/2026_09_16_180000_restrict_financial_history_cascades.php`
+  changes all six FKs above, plus `stores.user_id`, to `restrictOnDelete()`
+  — the database itself now refuses to delete a User/Store/Wallet/Order/
+  Payment while any financial-history child still references it, the same
+  way Payouts' own schema already did. Verified against the real migrated
+  schema by `tests/Feature/Domain/Payments/PaymentsSchemaDeletePolicyTest`,
+  and proven safe to run against a database already holding real financial
+  history by `tests/Feature/Domain/Payments/FinancialHistoryCascadeMigrationSafetyTest`.
+- **Application:** `ProfileController::destroy()` now refuses to delete a
+  User who owns any Store — trashed or not — *before* calling
+  `$user->delete()`, turning what used to be either silent data loss or an
+  unhandled `QueryException` into a normal, controlled validation-error
+  response. Verified across a plain customer, an empty Store, a
+  soft-deleted-only Store, and Stores with Wallet, Payment, Payout, and
+  mixed financial history by `tests/Feature/ProfileAccountDeletionFinancialHistoryTest`.
+
+**What this deliberately does not do:** offer any self-service path for a
+vendor with financial history to actually close their account —
+`ProfileController::destroy()` blocks unconditionally and says "contact
+support." Anonymizing or soft-deleting a vendor's identity while preserving
+their ledger remains unimplemented; see `INVARIANTS.md`'s "Known
+Non-Guarantees" section. And rolling the migration's `down()` back
+genuinely reopens the original vulnerability for any deletion performed
+afterward — `down()` is schema-only and never touches existing rows, but it
+is not an operationally safe state to run in; see `FAILURE-MODEL.md`'s
+"Resolution" section for both of these caveats stated in full.
 
 ## 8. Keeping this contract from going stale
 
