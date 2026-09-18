@@ -5,6 +5,24 @@ seeded/defined state is never assigned by any production code path, it is
 labeled **DORMANT** — this is not a value judgement, it's a direct
 enum-usage grep result, cited so it can be re-verified.
 
+## Order (`App\Domain\Orders\Enums\OrderLifecycleState` over the `order_statuses` table)
+
+States: `Pending`, `Paid`, `Failed`, `Refunded` — exactly the four seeded slugs,
+all four actively produced (no dormant states). `isTerminal()`: only `Refunded`.
+**Not** a mirror of `PaymentStatus`: `Failed` means "the latest payment attempt
+failed" and is non-terminal.
+
+```
+Pending ──(sale completed)──► Paid ──(full customer_refund completed)──► Refunded  [terminal]
+Pending ──(sale failed)─────► Failed ──(a later attempt's sale completed)──► Paid
+```
+
+Everything else is forbidden (`paid→failed`, `refunded→*`, `→pending`, …);
+repeating a transition into the current state is an explicit no-op. Owner of
+every transition: `OrderLifecycleService`, each authorized by the Order's own
+`sale` Wallet transaction. No fulfillment or cancelled state exists — see
+`ORDER-LIFECYCLE.md`.
+
 ## Payment (`App\Domain\Payments\Enums\PaymentStatus`)
 
 States: `Pending`, `Paid`, `Failed`, `Refunded`. `isTerminal()`: `Pending` →

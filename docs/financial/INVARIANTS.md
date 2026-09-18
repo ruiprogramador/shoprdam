@@ -119,6 +119,28 @@ here is held to.
 | RECON-18 | Reconciliation never constructs a synthetic `ProviderEventOutcome` or `PaymentProviderEvent` row to simulate a webhook | `App\Domain\Payments\Services\ProviderReconciler` | ENFORCED | `tests/Architecture/ReconciliationNoFinancialMutationTest`, `ProviderReconcilerTest` |
 | RECON-20 | `RemoteMissing` may be emitted only when the resolved provider both implements `App\Domain\Payments\Contracts\SupportsConfirmedResourceAbsence` and confirms absence for that exact exception — never inferred from a generic non-retryable failure classification alone | `App\Payments\Stripe\StripePaymentProvider::isConfirmedAbsent()` (implements it, via `getHttpStatus() === 404`); `App\Payments\EasyPay\EasyPayPaymentProvider` (deliberately does not implement it — no verified evidence for EasyPay's absence semantics) | ENFORCED | `ProviderReconcilerTest` item [A] (Stripe 404) and items [E]/[F]/[G]/[H] (every other non-retryable failure, both providers, including an EasyPay 404-shaped response, → `RetrievalFailed`, never `RemoteMissing`) |
 
+## ORDER-XX (new — `feat/order-lifecycle`, verified against production code and tests before formalizing)
+
+Full audit, transition matrix, and the decisions deliberately left open live in
+`docs/financial/ORDER-LIFECYCLE.md`. Only invariants with a passing, named test
+are mirrored here. `ORDER-07`/`ORDER-08` (cancellation) are listed as NOT
+SUPPORTED because no cancellation exists; `ORDER-09` (whether a refund should
+replace the lifecycle state) is an **open product decision** and is not asserted.
+
+| ID | Statement | Owner | Status | Test |
+|---|---|---|---|---|
+| ORDER-01 | Every status change of an existing Order goes through one canonical boundary | `App\Domain\Orders\Services\OrderLifecycleService` (+ `App\Models\Order::performUpdate()`, a runtime guard that rejects an Eloquent status change) | ENFORCED | `OrderLifecycleServiceTest` (every Eloquent style: `update`, `forceFill`, `fill`, `saveQuietly`, `updateQuietly`, `withoutEvents`, `associate`, `push`), `OrderLifecycleBoundaryTest` (static scans of `app/`, `routes/`, `bootstrap/`, `config/`, `database/seeders/`, with self-tests). **Limits:** a status column/table name assembled at runtime or raw SQL built from parts evades a text scan; no runtime guard sees a write that never touches a model instance; Order *creation* is unconstrained (no production creator exists); code run outside the repository (tinker/`psql`) is beyond any test |
+| ORDER-02 | Only explicitly allowed Order transitions occur (`pending→paid`, `pending→failed`, `failed→paid`, `paid→refunded`) | `OrderLifecycleState` matrix + `OrderLifecycleService` | ENFORCED | `OrderLifecycleStateTest` (all 16 pairs), `OrderLifecycleServiceTest` |
+| ORDER-03 | A terminal Order state (`refunded`) never returns to an active one | `OrderLifecycleState::isTerminal()` | ENFORCED | `OrderLifecycleServiceTest` "refunded is terminal" |
+| ORDER-04 | Payment and Order remain separate state machines — the Orders domain has no Payments-domain dependency | `App\Domain\Orders\*` | ENFORCED | `OrderLifecycleBoundaryTest` |
+| ORDER-05 | An Order becomes `paid` only from a settled `sale` Wallet transaction, via the canonical successful-payment path | `OrderLifecycleService` evidence checks (morph-aware ownership — never the raw `referenceable_type` string); only `PaymentEventProcessor` may call it | ENFORCED | `OrderLifecycleServiceTest` (evidence rejections, morph-map + legacy-row regression), `OrderPaymentIntegrationTest`, `OrderLifecycleBoundaryTest` |
+| ORDER-06 | A PaymentAttempt failure never terminalizes a payable Order (`failed` is non-terminal; a later attempt still pays it) | `OrderLifecycleState::Failed` | ENFORCED | `OrderPaymentIntegrationTest`, `CrossProviderFailoverTest` |
+| ORDER-07 | Cancellation obeys explicit state/financial rules | — | **NOT SUPPORTED** | No `cancelled` state or producer exists |
+| ORDER-08 | Cancellation never fabricates or implies a refund | — | **NOT SUPPORTED** | No cancellation exists |
+| ORDER-10 | A repeated transition is an explicit no-op (no timestamp rewrite, no event) or an explicit error — never applied twice | `OrderLifecycleService` | ENFORCED | `OrderLifecycleServiceTest` |
+| ORDER-11 | Concurrent transitions cannot produce an impossible state (row lock + compare-and-set, decided from fresh state) | `OrderLifecycleService` | ENFORCED (lock/CAS) / true parallelism **unproven** | `OrderLifecycleServiceTest` (stale instance, CAS conflict) — sequential simulation only, see the Concurrency note |
+| ORDER-12 | Order lifecycle code never mutates Wallet state, creates a Payment, or fabricates a provider event | `App\Domain\Orders\*` | ENFORCED | `OrderLifecycleBoundaryTest`, `OrderLifecycleServiceTest` |
+
 ## Concurrency note (applies to every ENFORCED invariant above that cites a lock/CAS)
 
 Every "ENFORCED" status backed by a lock or CAS has been verified as a real
@@ -210,6 +232,40 @@ column exists" as "this is a supported feature":
   documented Phase-1 detection gap for EasyPay specifically (Stripe is
   unaffected: its 404 is a genuine, precise signal — `RECON-20`), not a
   bug. See `docs/financial/RECONCILIATION.md` §13.
+- **Orders have no fulfillment states and no cancellation.** Only
+  `pending`/`paid`/`failed`/`refunded` exist; `accepted/preparing/ready/
+  completed/cancelled` are undefined because the product has no buyer, order
+  items, or fulfillment actor, and no canonical refund-initiation path a
+  cancellation of a paid Order could use (`ORDER-07`/`ORDER-08`). See
+  `docs/financial/ORDER-LIFECYCLE.md` §3/§11.
+- **Order `failed` is non-terminal and means only "the latest payment attempt
+  failed".** A Payment whose attempts all failed stays payable, so a later
+  successful attempt moves `failed → paid`. It is a legacy slug name, not a
+  verdict on the Order (`ORDER-06`).
+- **An Order whose state contradicts the financial fact being settled blocks
+  settlement — deliberately.** If `PaymentEventProcessor` reaches a transition
+  the Order matrix forbids (only possible from corrupt/inconsistent data, never
+  from any code path), the exception rolls the Wallet mutation back too and the
+  webhook errors and is retried. Rollback is the only policy that keeps the state
+  repairable: `confirm()`/`markFailed()`/`reverse()` are one-shot, so committing
+  the Wallet while skipping the Order would leave the Order, Payment and attempt
+  permanently stuck. For a stored/replayed event, settlement resumes
+  automatically once the Order is repaired; for a *live* webhook nothing local is
+  stored, so recovery depends on provider redelivery, after which the attempt
+  stays `Claimed` and reconciliation flags it (`RemoteSucceededNoSettlementPath`).
+  There is no operator repair tool. Run the read-only pre-deploy consistency
+  check in `docs/financial/ORDER-LIFECYCLE.md` §13 before rollout. Same
+  fail-closed precedent as `PaymentAttemptNotFoundException`.
+- **`OrderTransitioned` is at-most-once, not durable delivery.** It is emitted
+  after the outermost commit; a crash between the commit and the callback loses
+  it (no outbox). A *synchronous* listener that throws does so after the durable
+  commit — the exception reaches the caller but nothing is rolled back.
+  Listeners must be idempotent, should be queued, and must never be relied on to
+  make a transition happen.
+- **Order creation is unconstrained and historical `paid_at`/`refunded_at` are
+  `NULL`.** No production code creates Orders yet, so "orders start `pending`"
+  is unenforced; rows that transitioned before `feat/order-lifecycle` have no
+  recorded transition time (deriving one from `updated_at` would fabricate it).
 - **A vendor who owns a Store has no self-service path to close their
   account at all, ever** (CROSS-14's fix). `ProfileController::destroy()`
   unconditionally blocks and points them at "contact support" — there is no
@@ -249,4 +305,5 @@ listed once here rather than repeated per row:
 | Payments/Wallet financial FKs resist a future cascade regression / SoftDeletes substitute / direct truncate | `tests/Architecture/FinancialHistoryDeletePolicyTest` |
 | The CROSS-14 hardening migration is safe against a database already holding real financial history | `tests/Feature/Domain/Payments/FinancialHistoryCascadeMigrationSafetyTest` |
 | `ProfileController::destroy()` blocks account deletion for any Store owner before any mutation | `tests/Feature/ProfileAccountDeletionFinancialHistoryTest` |
+| Only the canonical lifecycle service writes an Order's status; only `PaymentEventProcessor` calls a transition; the Orders domain has no Payments/Wallet-write dependency | `tests/Architecture/OrderLifecycleBoundaryTest` |
 | This registry itself stays complete | `tests/Architecture/FinancialContractRegistryTest` (new, see below) |
