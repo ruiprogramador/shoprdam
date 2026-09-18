@@ -4,6 +4,7 @@ namespace App\Payments\Stripe;
 
 use App\Domain\Payments\Contracts\PaymentProviderContract;
 use App\Domain\Payments\Contracts\SupportsCanonicalRetrieval;
+use App\Domain\Payments\Contracts\SupportsConfirmedResourceAbsence;
 use App\Domain\Payments\DTOs\ProviderPaymentResult;
 use App\Domain\Payments\Enums\FailureClass;
 use App\Domain\Payments\MinorUnits;
@@ -27,7 +28,7 @@ use Throwable;
  * past App\Domain\Payments\Services\PaymentService ever sees a Stripe SDK
  * type. See docs/wallet/integrations.md.
  */
-class StripePaymentProvider implements PaymentProviderContract, SupportsCanonicalRetrieval
+class StripePaymentProvider implements PaymentProviderContract, SupportsCanonicalRetrieval, SupportsConfirmedResourceAbsence
 {
     private StripeClient $client;
 
@@ -94,6 +95,24 @@ class StripePaymentProvider implements PaymentProviderContract, SupportsCanonica
                 : FailureClass::NonRetryable,
             default => FailureClass::Retryable,
         };
+    }
+
+    /**
+     * Stripe's own REST convention (used consistently across its entire
+     * API, not guessed at for this one endpoint): HTTP 404 means "the
+     * requested resource doesn't exist" — distinct from 400 (malformed
+     * request), 401 (bad credentials), 403 (insufficient permissions), and
+     * 402/a CardException (a declined card, meaningless for a GET). All of
+     * those other conditions are `FailureClass::NonRetryable` too (see
+     * classifyFailure() above) but prove nothing about whether the
+     * PaymentIntent exists — only the HTTP status itself does. Checking
+     * `getHttpStatus()` directly, not exception subtype, is what makes this
+     * precise: `InvalidRequestException` is thrown for both a 404 and a
+     * 400, and only the status code tells them apart.
+     */
+    public function isConfirmedAbsent(Throwable $e): bool
+    {
+        return $e instanceof ApiErrorException && $e->getHttpStatus() === 404;
     }
 
     private function toResult(PaymentIntent $paymentIntent): ProviderPaymentResult

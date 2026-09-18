@@ -33,6 +33,21 @@ use Throwable;
  * is deliberately unused here, keeping this adapter's lifecycle a direct,
  * one-call match for what PaymentProviderContract::createOrGetPayment()
  * needs. Multibanco doesn't support that split at all (sale-only).
+ *
+ * Deliberately does NOT implement
+ * App\Domain\Payments\Contracts\SupportsConfirmedResourceAbsence.
+ * EasyPayRequestException's own docblock already documents why: EasyPay's
+ * 400/403/404/422 responses are bucketed together as equally "will fail
+ * identically on every retry" — this codebase has no verified evidence
+ * distinguishing a confirmed "no such payment" response from any other
+ * definitive rejection (a malformed request, a permission error). Guessing
+ * that some particular status code means "not found" without that evidence
+ * would risk App\Domain\Payments\Services\ReconciliationClassifier recording
+ * a `RemoteMissing` finding — a durable, High-severity, human-facing claim —
+ * from evidence that only actually proves "the request failed." See
+ * docs/financial/RECONCILIATION.md §8/§13 for the full reasoning; per that
+ * document's Option 3, EasyPay retrieval failures are reported operationally
+ * (`RetrievalFailed`) and never become a `RemoteMissing` finding in Phase 1.
  */
 class EasyPayPaymentProvider implements PaymentProviderContract, SupportsCanonicalRetrieval
 {
