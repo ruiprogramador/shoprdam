@@ -89,6 +89,36 @@ branch after verifying each one against production code.
 | CROSS-13 | A terminal succeeded cannot be resent/re-executed to duplicate an economic effect | `PaymentAttemptStatus`/`PayoutStatus` `isTerminal()` gates | ENFORCED | `PaymentServiceGatingTest`, `PayoutAttemptLifecycleTest` "refuses to create a new attempt for an already-terminal payout" |
 | CROSS-14 | Relevant financial history is append-only and cannot disappear via operational cascade | Payouts: `PayoutService`/migrations. Payments/Wallet: `database/migrations/2026_09_16_180000_restrict_financial_history_cascades.php` (DB) + `App\Http\Controllers\User\ProfileController::destroy()` (app) | **ENFORCED** | DB-level: all six Payments/Wallet FKs (`payment_attempts.payment_id`, `payments.order_id`, `store_wallet_transactions.store_wallet_id`, `orders.store_id`, `store_wallets.store_id`, `stores.user_id`) are `restrictOnDelete()`, verified against real `PRAGMA foreign_key_list` output by `PaymentsSchemaDeletePolicyTest` (mirrors Payouts' own `PayoutSchemaDeletePolicyTest`). App-level: `ProfileController::destroy()` refuses to hard-delete a User who owns any Store — trashed or not — before any mutation, never surfacing the constraint as an unhandled `QueryException`; see `ProfileAccountDeletionFinancialHistoryTest` (scenarios A1–A7: no Store, empty Store, soft-deleted Store, Wallet/ledger history, Payment history, Payout history, and a mixed case). Migration safety (existing rows survive `down()`+`up()`, the live FK policy genuinely flips both ways) is proven — without touching a real database — by `FinancialHistoryCascadeMigrationSafetyTest`. Regression coverage against a future migration/model silently reopening this: `FinancialHistoryDeletePolicyTest`. See `FAILURE-MODEL.md`'s "Critical finding" for the original reproduction and its resolution, including what re-running the migration's `down()` would reopen. |
 
+## RECON-XX (new — Phase 1 of `feat/financial-reconciliation`, verified against production code and tests before formalizing)
+
+Full design record, taxonomy, and the complete Phase-1 invariant list
+(including entries not yet promoted here) live in
+`docs/financial/RECONCILIATION.md` — that document is the source of truth
+for reconciliation design decisions; this table only ever mirrors an
+invariant *after* it has a passing, named test proving it, per this
+registry's own status-legend discipline ("never assigned optimistically").
+Several invariants `RECONCILIATION.md` §21 lists are deliberately **not**
+duplicated here yet (RECON-03, 07, 08, 10, 11, 17, 19) because no dedicated
+test proves them independently of the ones below — true "by construction"
+is not sufficient for this registry, the same standard every other row
+here is held to.
+
+| ID | Statement | Owner | Status | Test |
+|---|---|---|---|---|
+| RECON-01 | Reconciliation (Phase 1: provider retrieval only) never creates a financial settlement path of any kind | `App\Domain\Payments\Services\ProviderReconciler` (never calls `PaymentEventProcessor`/`PaymentAttemptRecoveryService`/`PaymentService::finalizeAttempt()`) | ENFORCED | `tests/Architecture/ReconciliationNoFinancialMutationTest` |
+| RECON-02 | Reconciliation persistence is purely observational and cannot itself produce a financial effect | `App\Domain\Payments\Services\ReconciliationFindingRepository` | ENFORCED | `tests/Architecture/ReconciliationNoFinancialMutationTest`, `ProviderReconcilerTest` |
+| RECON-04 | Amount/currency/correlation mismatches discovered by reconciliation are never auto-corrected in either direction | `App\Domain\Payments\Services\ReconciliationClassifier` | ENFORCED | `ReconciliationClassifierTest` |
+| RECON-05 | A reconciliation retrieval failure — retryable (timeout/5xx/connection failure), or non-retryable without a provider-confirmed absence signal (auth/permission/malformed-request/ambiguous SDK failure) — is never classified as a financial mismatch, is never persisted as a finding, and never touches an already-open finding for that identity | `App\Domain\Payments\Services\ProviderReconciler` | ENFORCED | `ProviderReconcilerTest` items [B]–[I] |
+| RECON-06 | A remote state corresponding to an unsupported local operation (a refund-shaped or unrecognized provider status) always fails closed to a non-actionable finding | `App\Domain\Payments\Services\ReconciliationClassifier` | ENFORCED | `ReconciliationClassifierTest` |
+| RECON-09 | At most one open reconciliation episode exists per `(provider, provider_reference)` identity at a time | `payment_reconciliation_findings.active_identity` (nullable-unique, application-managed CAS) | ENFORCED | `ReconciliationFindingLifecycleTest`, `ReconciliationFindingSchemaDeletePolicyTest` |
+| RECON-12 | Repeated observation of the same open reconciliation episode never creates a second row, regardless of scheduler frequency | `App\Domain\Payments\Services\ReconciliationFindingRepository` | ENFORCED | `ReconciliationFindingLifecycleTest` |
+| RECON-13 | Reconciliation may mark a finding actionable only when the codebase already contains a canonical, idempotent operation *proven by execution trace* to converge from that exact state — Phase 1 satisfies this for zero categories | `App\Domain\Payments\Services\ReconciliationClassifier` (no `actionable` concept exists in Phase 1 at all) | ENFORCED | `ReconciliationClassifierTest`, `ReconciliationExecutionTraceTest` |
+| RECON-14 | A reconciliation observation is never financial correction | `App\Domain\Payments\Services\ReconciliationFindingRepository` | ENFORCED | `tests/Architecture/ReconciliationNoFinancialMutationTest` |
+| RECON-15 | Acknowledging a reconciliation finding is never financial correction — independent of `status`/`resolved_at` | `App\Domain\Payments\Models\ReconciliationFinding` (`acknowledged_at`/`acknowledged_by` columns) | ENFORCED | `ReconciliationFindingLifecycleTest` |
+| RECON-16 | Provider unavailability (retryable or not) during reconciliation is never treated as payment failure | `App\Domain\Payments\Services\ProviderReconciler` | ENFORCED | `ProviderReconcilerTest` items [B]–[H] |
+| RECON-18 | Reconciliation never constructs a synthetic `ProviderEventOutcome` or `PaymentProviderEvent` row to simulate a webhook | `App\Domain\Payments\Services\ProviderReconciler` | ENFORCED | `tests/Architecture/ReconciliationNoFinancialMutationTest`, `ProviderReconcilerTest` |
+| RECON-20 | `RemoteMissing` may be emitted only when the resolved provider both implements `App\Domain\Payments\Contracts\SupportsConfirmedResourceAbsence` and confirms absence for that exact exception — never inferred from a generic non-retryable failure classification alone | `App\Payments\Stripe\StripePaymentProvider::isConfirmedAbsent()` (implements it, via `getHttpStatus() === 404`); `App\Payments\EasyPay\EasyPayPaymentProvider` (deliberately does not implement it — no verified evidence for EasyPay's absence semantics) | ENFORCED | `ProviderReconcilerTest` item [A] (Stripe 404) and items [E]/[F]/[G]/[H] (every other non-retryable failure, both providers, including an EasyPay 404-shaped response, → `RetrievalFailed`, never `RemoteMissing`) |
+
 ## Concurrency note (applies to every ENFORCED invariant above that cites a lock/CAS)
 
 Every "ENFORCED" status backed by a lock or CAS has been verified as a real
@@ -145,6 +175,41 @@ column exists" as "this is a supported feature":
 - **No payout-attempt health/observability command exists** — only
   `wallet:audit` (balance reconciliation) and `payments:health` (Payments
   only).
+- **A `Claimed` `PaymentAttempt` for which the provider reports `succeeded`
+  but no webhook was ever delivered has no canonical settlement path at
+  all** (discovered and proven by execution trace during
+  `feat/financial-reconciliation` — see `docs/financial/RECONCILIATION.md`
+  §3.A/§3.B). Neither `PaymentAttemptRecoveryService::recover()` nor
+  `PaymentService::finalizeAttempt()` confirms the pending Wallet
+  transaction or settles the attempt without a real, delivered (or
+  previously stored) provider event — the only code path into
+  `PaymentEventProcessor::applySucceeded()`. Phase 1 of reconciliation
+  surfaces this state as the `RemoteSucceededNoSettlementPath` finding
+  category and leaves it open indefinitely; it does not, and by design
+  (`RECON-01`/`RECON-13`) cannot, invent a corrective action for it. Closing
+  this gap — a genuine "settle from a polled canonical result, not just a
+  webhook" capability — is unimplemented and would be its own separate,
+  financially load-bearing design decision.
+- **Provider reconciliation (Phase 1) covers Payments only, and only
+  Direction 1 (local attempt → provider, via `SupportsCanonicalRetrieval`).**
+  Discovering a provider-side payment with no local record at all
+  (Direction 2) requires a `SupportsPeriodicExport`-shaped capability not
+  implemented for either provider yet — Stripe's API could support it,
+  EasyPay's confirmed capability is unresearched. Payout reconciliation
+  does not exist at all: `ManualPayoutProvider` has no remote system to
+  reconcile against. See `docs/financial/RECONCILIATION.md` §1/§7/§9.2.
+- **EasyPay retrieval failures can never produce a `RemoteMissing`
+  reconciliation finding, even a response shaped like "not found."**
+  `App\Payments\EasyPay\EasyPayPaymentProvider` deliberately does not
+  implement `App\Domain\Payments\Contracts\SupportsConfirmedResourceAbsence`
+  — `EasyPayRequestException`'s own docblock buckets 400/403/404/422
+  together as equally "will fail identically on every retry," with no
+  verified evidence in this codebase distinguishing "doesn't exist" from
+  any other definitive rejection. Every EasyPay retrieval failure is
+  reported as the operational `RetrievalFailed` outcome instead — a
+  documented Phase-1 detection gap for EasyPay specifically (Stripe is
+  unaffected: its 404 is a genuine, precise signal — `RECON-20`), not a
+  bug. See `docs/financial/RECONCILIATION.md` §13.
 - **A vendor who owns a Store has no self-service path to close their
   account at all, ever** (CROSS-14's fix). `ProfileController::destroy()`
   unconditionally blocks and points them at "contact support" — there is no

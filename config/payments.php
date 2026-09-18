@@ -155,6 +155,19 @@ return [
     |
     */
 
+    /*
+    |--------------------------------------------------------------------------
+    | Reconciliation finding chunking (Phase 1 — see docs/financial/RECONCILIATION.md)
+    |--------------------------------------------------------------------------
+    |
+    | How many candidate PaymentAttempt rows
+    | App\Console\Commands\ReconcilePaymentsAgainstProvider loads per
+    | chunkById() page — mirrors reconciliation_chunk_size above exactly.
+    |
+    */
+
+    'reconciliation_finding_chunk_size' => (int) env('PAYMENTS_RECONCILIATION_FINDING_CHUNK_SIZE', 200),
+
     'health' => [
         // An attempt is expected to be picked up and either resolved or
         // failed within a few reconciliation cycles (every 5 minutes) —

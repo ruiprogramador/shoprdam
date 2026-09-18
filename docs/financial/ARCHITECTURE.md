@@ -215,3 +215,63 @@ narrower, mechanical failure mode of an ID or a known-limitation entry
 silently disappearing from the registry — it cannot and does not verify
 that a new financial behavior was documented at all. That remains a human
 (or reviewing agent) judgment call at PR time.
+
+## 9. Provider reconciliation — Phase 1 (`feat/financial-reconciliation`)
+
+Full design record: `docs/financial/RECONCILIATION.md`. Full invariant list:
+`INVARIANTS.md`'s `RECON-XX` section. Summarized here per this document's
+own §8 discipline (this branch changes recovery/reconciliation-adjacent
+observability).
+
+Phase 1 answers a question nothing above this section answers: does a
+`PaymentAttempt`'s local belief about its own outcome still agree with the
+provider's own canonical record of it, independent of whether a webhook
+ever arrived to tell us? `App\Console\Commands\ReconcilePaymentsAgainstProvider`
+(scheduled every 5 minutes, `withoutOverlapping()->onOneServer()`) is
+**strictly detection + persistence + observability** — it never mutates a
+Wallet, a `Payment`, a `PaymentAttempt`, an `Order`, or a
+`PaymentProviderEvent`, and never calls
+`PaymentAttemptRecoveryService::recover()`,
+`PaymentService::finalizeAttempt()`, or `PaymentEventProcessor::apply()` —
+enforced mechanically by `tests/Architecture/ReconciliationNoFinancialMutationTest`,
+the same "plain source scan" pattern as `PaymentRecoveryNoDirectWalletMutationTest`.
+
+Shape: `App\Domain\Payments\Services\ProviderReconciler` reads a
+`PaymentAttempt` with a known `provider_reference`, calls the resolved
+provider's existing `SupportsCanonicalRetrieval::retrieveByReference()`
+(already implemented by both `StripePaymentProvider` and
+`EasyPayPaymentProvider`), classifies the result via the pure
+`App\Domain\Payments\Services\ReconciliationClassifier`, and persists a
+bounded episode via `App\Domain\Payments\Services\ReconciliationFindingRepository`
+to `payment_reconciliation_findings`. Zero categories are automatically
+actionable — proven, not assumed, by execution trace against
+`PaymentAttemptRecoveryService`/`PaymentService`/`PaymentEventProcessor`
+(see `RECONCILIATION.md` §3), which is why this feature adds an
+observability surface, not a new settlement path, and why the "recovery and
+reconciliation ownership" table in §4 above is unchanged by it — Phase 1
+reconciliation owns none of that table's cells.
+
+One narrow, genuinely new piece of provider code exists:
+`App\Domain\Payments\Contracts\SupportsConfirmedResourceAbsence::isConfirmedAbsent()`,
+an optional capability (mirroring `SupportsCanonicalRetrieval`'s own
+optionality) that `StripePaymentProvider` implements via its own
+`getHttpStatus() === 404` check. This exists because a post-implementation
+evidence-correctness audit found that classifying a `RemoteMissing` finding
+from `FailureClass::NonRetryable` alone — a bucket that also covers
+authentication/permission/malformed-request failures — was not evidenced;
+see `RECONCILIATION.md` §13/§21 (`RECON-20`) for the full finding.
+`EasyPayPaymentProvider` deliberately does not implement this capability —
+no verified evidence distinguishes EasyPay's "not found" response from any
+other definitive rejection, so EasyPay retrieval failures can never produce
+a `RemoteMissing` finding in Phase 1 (see `INVARIANTS.md`'s Known
+Non-Guarantees).
+
+Out of scope for Phase 1, explicitly: Payout reconciliation (no remote
+system exists behind `ManualPayoutProvider` to reconcile against); Direction
+2 (discovering a provider-side payment with no local record at all — needs
+a `SupportsPeriodicExport`-shaped capability not implemented for either
+provider); any automatic corrective action for any finding category,
+including the one category (`RemoteSucceededNoSettlementPath`) that
+`RECONCILIATION.md` §3 shows has no existing canonical settlement path at
+all — see `INVARIANTS.md`'s Known Non-Guarantees for that gap stated in
+full.
