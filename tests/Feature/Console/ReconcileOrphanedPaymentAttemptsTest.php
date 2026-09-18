@@ -689,7 +689,13 @@ it('eventually replays a refund event queued against an attempt already settled 
     // specific status.
     $store = Store::factory()->create();
     $wallet = $store->wallets()->first();
-    $order = Order::factory()->forStore($store)->amount('42.50')->create();
+    // `paid`, like the Payment/attempt/sale below: applySucceeded()'s
+    // markSettled() moves the Order to `paid` in the same transaction that
+    // completes the sale, so a settled attempt never coexists with a still-
+    // `pending` Order. (The Order lifecycle boundary — see
+    // docs/financial/ORDER-LIFECYCLE.md — correctly refuses a refund of an
+    // Order that never became `paid`.)
+    $order = Order::factory()->forStore($store)->amount('42.50')->status('paid')->create();
 
     $payment = Payment::create(['order_id' => $order->id, 'status' => PaymentStatus::Paid]);
     $attempt = PaymentAttempt::create([

@@ -17,7 +17,8 @@ Provider (Stripe/EasyPay)
   → finds the exact StoreWalletTransaction by (external_provider, external_reference)
       — never by Payment.current_payment_attempt_id (CROSS-10)
   → WalletTransactionService::confirm() — pending sale → completed, wallet.balance credited
-  → markSettled(): Order.order_status_id, Payment.status=Paid,
+  → markSettled(): Order → paid via OrderLifecycleService (authorized by the
+    just-completed sale; see ORDER-LIFECYCLE.md), Payment.status=Paid,
     PaymentAttempt.status=Succeeded (attempt resolved by the exact
     (provider, provider_reference) it claimed, never "whichever is current")
 ```
@@ -55,7 +56,8 @@ Provider refund event (Stripe charge.refunded; EasyPay: NOT SUPPORTED, see below
   → if equal: WalletTransactionService::reverse() — new completed
     `customer_refund` transaction, amount = original->amount exactly,
     related_transaction_id = original.id
-  → markSettled(): Order status, Payment.status = Refunded
+  → markSettled(): Order → refunded via OrderLifecycleService (authorized by the
+    completed customer_refund reversal), Payment.status = Refunded
 ```
 
 `reverse()` structurally cannot exceed the original amount — it has no

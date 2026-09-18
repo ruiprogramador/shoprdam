@@ -275,3 +275,30 @@ including the one category (`RemoteSucceededNoSettlementPath`) that
 `RECONCILIATION.md` §3 shows has no existing canonical settlement path at
 all — see `INVARIANTS.md`'s Known Non-Guarantees for that gap stated in
 full.
+
+## 10. Order lifecycle (`feat/order-lifecycle`)
+
+Full record: `ORDER-LIFECYCLE.md`; invariants: `INVARIANTS.md`'s `ORDER-XX`.
+
+An Order's status now changes through exactly one boundary,
+`App\Domain\Orders\Services\OrderLifecycleService` (`markPaid`,
+`markPaymentFailed`, `markRefunded` — no generic setter). The direction of
+authority is **canonical financial settlement → allowed Order transition**:
+`PaymentEventProcessor::markSettled()` — the only caller — invokes it after the
+Wallet has settled, inside the same transaction, and each transition is
+authorized by the Order's own `sale` Wallet transaction (re-read from the
+database). The Orders domain only *reads* Wallet rows as evidence; it has no
+dependency on the Payments domain and never writes Wallet, Payment, or provider
+state. This adds an authorization/consistency layer, not a settlement path: the
+"Canonical writers" of §2 are unchanged.
+
+Concurrency is a row lock plus compare-and-set on the fresh state. Settlement is
+atomic: if the Order transition (or anything after it) fails, the Wallet
+mutation rolls back too — the only policy that keeps a corrupt-Order settlement
+repairable, since the Wallet verbs are one-shot (`ORDER-LIFECYCLE.md` §5).
+`OrderTransitioned` is emitted after the outermost commit and is at-most-once,
+not durable delivery; a throwing synchronous listener fails *after* the commit.
+Enforced by `OrderLifecycleBoundaryTest` (static scans of production code with
+self-tests) and a `performUpdate()` runtime guard on `App\Models\Order` that
+quiet saves cannot bypass. Explicitly not built: fulfillment states,
+cancellation, refund initiation, any Order UI, any operator repair tool.

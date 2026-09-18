@@ -2,6 +2,8 @@
 
 namespace App\Domain\Payments\Services;
 
+use App\Domain\Orders\Enums\OrderLifecycleState;
+use App\Domain\Orders\Services\OrderLifecycleService;
 use App\Domain\Payments\DTOs\ProviderEventOutcome;
 use App\Domain\Payments\Enums\EventApplicationOutcome;
 use App\Domain\Payments\Enums\PaymentAttemptStatus;
@@ -18,12 +20,12 @@ use App\Domain\Wallet\Exceptions\TransactionAlreadyReversedException;
 use App\Domain\Wallet\Exceptions\TransactionNotPendingException;
 use App\Domain\Wallet\WalletTransactionReference;
 use App\Models\Order;
-use App\Models\OrderStatus;
 use App\Models\StoreWalletTransaction;
 use App\Services\Wallet\WalletTransactionService;
 use Illuminate\Database\QueryException;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Log;
+use LogicException;
 use Throwable;
 
 /**
@@ -52,6 +54,7 @@ class PaymentEventProcessor
     public function __construct(
         private readonly WalletTransactionService $walletTransactionService,
         private readonly ProviderEventTranslatorManager $translators,
+        private readonly OrderLifecycleService $orders,
     ) {}
 
     public function apply(ProviderEventOutcome $outcome): EventApplicationOutcome
@@ -159,7 +162,7 @@ class PaymentEventProcessor
             // savepoint.
             DB::transaction(function () use ($transaction) {
                 $this->walletTransactionService->confirm($transaction);
-                $this->markSettled($transaction, PaymentStatus::Paid, PaymentAttemptStatus::Succeeded, 'paid');
+                $this->markSettled($transaction, PaymentStatus::Paid, PaymentAttemptStatus::Succeeded, OrderLifecycleState::Paid);
             });
         } catch (TransactionNotPendingException) {
             // Duplicate webhook delivery for an already-settled transaction: no-op.
@@ -193,7 +196,7 @@ class PaymentEventProcessor
                 // the customer may still retry with another provider/method
                 // and this same Payment ends up `paid`. Only applySucceeded()
                 // and applyRefunded() reach a Payment-level terminal state.
-                $this->markSettled($transaction, null, PaymentAttemptStatus::Failed, 'failed');
+                $this->markSettled($transaction, null, PaymentAttemptStatus::Failed, OrderLifecycleState::Failed);
             });
         } catch (TransactionNotPendingException) {
             // Duplicate webhook delivery for an already-settled transaction: no-op.
@@ -242,7 +245,7 @@ class PaymentEventProcessor
                     reversalCategorySlug: 'customer_refund',
                     reference: new WalletTransactionReference($outcome->provider, $outcome->reversalReference ?? $outcome->eventId),
                 );
-                $this->markSettled($original, PaymentStatus::Refunded, null, 'refunded');
+                $this->markSettled($original, PaymentStatus::Refunded, null, OrderLifecycleState::Refunded);
             });
         } catch (TransactionAlreadyReversedException) {
             // Duplicate webhook delivery for an already-reversed transaction: no-op.
@@ -308,7 +311,7 @@ class PaymentEventProcessor
         StoreWalletTransaction $transaction,
         ?PaymentStatus $paymentStatus,
         ?PaymentAttemptStatus $attemptStatus,
-        string $orderStatusSlug,
+        OrderLifecycleState $orderState,
     ): void {
         $order = $transaction->referenceable;
 
@@ -316,7 +319,19 @@ class PaymentEventProcessor
             return;
         }
 
-        $order->update(['order_status_id' => OrderStatus::bySlugOrFail($orderStatusSlug)->id]);
+        // The only Order-status change in the Payments domain — and it goes
+        // through the canonical Order lifecycle boundary, authorized by the
+        // Wallet transaction this method was just handed (never the other way
+        // round: an Order transition can't settle a payment, see
+        // docs/financial/ORDER-LIFECYCLE.md). A transition the matrix
+        // forbids, or evidence that doesn't check out, throws from inside the
+        // caller's DB::transaction() and rolls the Wallet mutation back too.
+        match ($orderState) {
+            OrderLifecycleState::Paid => $this->orders->markPaid($order, $transaction),
+            OrderLifecycleState::Failed => $this->orders->markPaymentFailed($order, $transaction),
+            OrderLifecycleState::Refunded => $this->orders->markRefunded($order, $transaction),
+            OrderLifecycleState::Pending => throw new LogicException('Nothing settles an Order back into pending.'),
+        };
 
         $payment = Payment::where('order_id', $order->id)->first();
 
@@ -353,7 +368,7 @@ class PaymentEventProcessor
             'order_id' => $order->id,
             'provider' => $transaction->external_provider,
             'provider_reference' => $transaction->external_reference,
-            'order_status' => $orderStatusSlug,
+            'order_status' => $orderState->value,
         ]);
     }
 
