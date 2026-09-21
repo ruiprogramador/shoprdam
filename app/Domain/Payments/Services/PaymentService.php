@@ -2,6 +2,7 @@
 
 namespace App\Domain\Payments\Services;
 
+use App\Domain\Orders\Services\OrderLineIntegrityChecker;
 use App\Domain\Payments\Contracts\PaymentProviderContract;
 use App\Domain\Payments\Contracts\SupportsCanonicalRetrieval;
 use App\Domain\Payments\DTOs\ProviderPaymentResult;
@@ -63,6 +64,7 @@ class PaymentService
         private readonly WalletTransactionService $walletTransactionService,
         private readonly PaymentProviderManager $providers,
         private readonly PaymentEventProcessor $eventProcessor,
+        private readonly OrderLineIntegrityChecker $orderLineIntegrity = new OrderLineIntegrityChecker,
     ) {}
 
     /**
@@ -139,6 +141,12 @@ class PaymentService
      */
     private function createDurableAttempt(Order $order, string $provider, string $method): PaymentAttempt
     {
+        // Fail closed BEFORE any Payment/attempt row exists: a line-backed
+        // Order whose stored amount/currency disagrees with its own immutable
+        // lines must never reach a provider. Legacy (line-less) Orders pass.
+        // Reads only orders/order_items — never a Product (ORDER-ITEM-14).
+        $this->orderLineIntegrity->assertConsistent($order);
+
         $payment = $this->findOrCreatePayment($order);
 
         return DB::transaction(function () use ($payment, $provider, $method) {
@@ -226,6 +234,12 @@ class PaymentService
      */
     private function claimProviderReference(PaymentAttempt $attempt): void
     {
+        // Re-checked here, the point that actually creates a remote payment
+        // and the pending Wallet sale from Order.amount — an attempt row
+        // created before a drift (or recovered later) must not slip past the
+        // check in createDurableAttempt().
+        $this->orderLineIntegrity->assertConsistent(Payment::findOrFail($attempt->payment_id)->order);
+
         $provider = $this->providers->driver($attempt->provider);
         $result = $provider->createOrGetPayment($attempt);
 

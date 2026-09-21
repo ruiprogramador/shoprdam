@@ -36,10 +36,10 @@
  * `DB::statement()`/`DB::unprepared()` call spelled with unusual whitespace
  * or backtick-quoting the text scan does not anticipate, all evade a text
  * scan — this is regex-based static analysis, not a database permission
- * system. There is still no database-level constraint that would block a
- * hard delete the way CROSS-14 protects financial history (§8/§12,
- * CATALOG-09) — that arrives only once `feat/order-items` adds a
- * `restrictOnDelete()` child FK into `products`. The runtime guard in
+ * system. No database constraint blocks a hard delete of EVERY Product
+ * (§8/§12, CATALOG-09): since `feat/order-items`, the
+ * `restrictOnDelete()` FK `order_items.product_id` makes the database refuse
+ * it for any Product an OrderItem references — and only those. The runtime guard in
  * App\Domain\Catalog\Models\Product (performUpdate()) covers every Eloquent
  * save of a model instance; a write that never touches a model instance is
  * only caught here, statically. Ad-hoc code run outside the repository
