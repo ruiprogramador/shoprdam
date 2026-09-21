@@ -202,10 +202,15 @@ as the status. No `failed_at` (re-enterable, so no stable meaning) and nothing
 for non-existent states. Historical rows keep `NULL`: nothing records when they
 actually transitioned, and deriving it from `updated_at` would fabricate history.
 
-**Creation is not constrained.** `Order` has no production creator yet, so the
-initial status is unguarded (a test-only tool and factories create Orders). The
-architecture test pins the one tool to `pending`. Enforce "orders start
-`pending`" when a real creation path is built.
+**Creation is not constrained at the model level.** There is still no customer
+checkout. Since `feat/order-items` the canonical way to create an Order is
+`App\Domain\Orders\Services\OrderCreationService` (line-backed, always at
+`pending` — see `docs/orders/ORDER-ITEMS.md`); the manual test tool
+`CreateTestStripeOrder` and the factories still create legacy line-less Orders
+directly. `OrderLifecycleBoundaryTest` pins both production creators to
+`pending` and to an exact allowlist; `OrderItemBoundaryTest` rejects any third
+production creator. Whether the `Order` model should itself refuse a non-`pending`
+insert remains open (§11 item 5).
 
 ## 9. Domain events
 
@@ -264,7 +269,7 @@ should be queued, and must never call back into a financial path.
 - **What none of this proves.** A status column or table name assembled at
   runtime, or raw SQL built from parts, evades a text scan, and no runtime guard
   sees a write that never touches a model instance. Order *creation* is
-  unconstrained (§8). Ad-hoc code run outside the repository (tinker, `psql`
+  only allowlist-constrained (§8). Ad-hoc code run outside the repository (tinker, `psql`
   against production) is beyond any test. The Wallet-evidence check is
   defence in depth against such callers, not a substitute for the above.
 

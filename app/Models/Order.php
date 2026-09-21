@@ -7,6 +7,7 @@ use Illuminate\Database\Eloquent\Builder;
 use Illuminate\Database\Eloquent\Factories\HasFactory;
 use Illuminate\Database\Eloquent\Model;
 use Illuminate\Database\Eloquent\Relations\BelongsTo;
+use Illuminate\Database\Eloquent\Relations\HasMany;
 use Illuminate\Database\Eloquent\Relations\HasOne;
 use Illuminate\Database\Eloquent\Relations\MorphMany;
 use LogicException;
@@ -25,6 +26,7 @@ class Order extends Model
 
     protected $casts = [
         'amount' => 'decimal:2',
+        'is_line_backed' => 'boolean',
         'paid_at' => 'datetime',
         'refunded_at' => 'datetime',
     ];
@@ -46,9 +48,21 @@ class Order extends Model
      * unaffected. What this cannot see is a write that never touches a model
      * instance (a query-builder/raw-SQL UPDATE elsewhere) — that is covered
      * statically by tests/Architecture/OrderLifecycleBoundaryTest.
-     * (`creating` is deliberately not guarded — there is no production
-     * Order-creation path yet, only a test tool and factories; see
-     * ORDER-LIFECYCLE.md §8.)
+     * (`creating` is deliberately not guarded — canonical line-backed creation
+     * is App\Domain\Orders\Services\OrderCreationService; the one dev tool and
+     * the factories still build legacy line-less Orders directly. See
+     * ORDER-LIFECYCLE.md §8 and docs/orders/ORDER-ITEMS.md.)
+     *
+     * Second guard (ORDER-ITEM-08/19): an Order whose persisted provenance is
+     * `is_line_backed` has a commercial aggregate — `store_id`, `currency_id`,
+     * `amount` — derived from its immutable OrderItems, and may no longer be
+     * changed through Eloquent; and the provenance flag itself never changes
+     * through Eloquent for any Order. The guard keys on that stable flag, NOT on
+     * whether lines currently exist, so it does not disappear if the lines are
+     * removed by a raw write. Legacy Orders are deliberately unaffected. A
+     * query-builder/raw-SQL UPDATE never reaches this method: that is covered
+     * statically (tests/Architecture/OrderItemBoundaryTest) and, at payment
+     * time, by OrderLineIntegrityChecker's fail-closed check.
      */
     protected function performUpdate(Builder $query)
     {
@@ -58,7 +72,31 @@ class Order extends Model
             );
         }
 
+        if ($this->exists && $this->isDirty('is_line_backed')) {
+            throw new LogicException('Order provenance (is_line_backed) is set once at creation and can never change.');
+        }
+
+        if ($this->exists && $this->isDirty(['store_id', 'currency_id', 'amount']) && $this->persistedAsLineBacked()) {
+            throw new LogicException(
+                'store_id, currency_id and amount of a line-backed Order are derived from its immutable OrderItems and cannot be changed.'
+            );
+        }
+
         return parent::performUpdate($query);
+    }
+
+    /**
+     * The PERSISTED provenance, never the in-memory (possibly dirty) value. If
+     * this instance was loaded without the column, the database is asked
+     * instead of assuming legacy — an unloaded flag must never read as false.
+     */
+    private function persistedAsLineBacked(): bool
+    {
+        if (array_key_exists('is_line_backed', $this->original)) {
+            return (bool) $this->original['is_line_backed'];
+        }
+
+        return (bool) static::query()->whereKey($this->getKey())->value('is_line_backed');
     }
 
     public function store(): BelongsTo
@@ -69,6 +107,12 @@ class Order extends Model
     public function currency(): BelongsTo
     {
         return $this->belongsTo(Currency::class);
+    }
+
+    /** Empty for a legacy Order; see docs/orders/ORDER-ITEMS.md §6. */
+    public function items(): HasMany
+    {
+        return $this->hasMany(OrderItem::class);
     }
 
     public function status(): BelongsTo

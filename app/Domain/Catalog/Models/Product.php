@@ -84,12 +84,12 @@ class Product extends Model
     /**
      * Hard deletion is deliberately blocked at the model level (§11 of the
      * design: "prefer fail-closed history semantics over convenient hard
-     * deletion"). Nothing today has a foreign key into `products` to make
-     * this impossible at the database level the way CROSS-14 protects
-     * financial history — that backstop only arrives once `feat/order-items`
-     * adds `order_items.product_id` (`restrictOnDelete()`). Until then, this
-     * is the only thing standing between "soft delete is the norm" and
-     * "someone quietly calls forceDelete() because nothing stops them."
+     * deletion"). Since `feat/order-items`, `order_items.product_id` is a
+     * `restrictOnDelete()` foreign key into `products`, so the DATABASE now
+     * refuses to hard-delete any Product an OrderItem references. That
+     * backstop is per referenced row, not absolute: a Product no OrderItem
+     * references can still be hard-deleted by a write that bypasses this
+     * guard, so this override remains the first line for such Products.
      *
      * Known, stated limitation (CATALOG-09 — never overstated as a complete
      * guarantee): this blocks only the instance-level API

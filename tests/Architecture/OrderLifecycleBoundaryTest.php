@@ -19,8 +19,10 @@
  * No production file outside an explicit allowlist mentions the
  * `order_status_id` column or `OrderStatus::`, writes the `orders` table
  * through the query builder or raw SQL, or calls a lifecycle transition; and
- * the Orders domain contains exactly one write-shaped call — the canonical
- * compare-and-set UPDATE on Order — and nothing that writes the ledger.
+ * the Orders domain contains exactly these write-shaped calls — the canonical
+ * compare-and-set UPDATE on Order, and OrderCreationService's Order insert +
+ * single order_items insert (feat/order-items) — and nothing that writes the
+ * ledger.
  *
  * ## What they do NOT prove (stated so nothing claims more than it checks)
  *
@@ -30,9 +32,11 @@
  * OrderLifecycleServiceTest) covers every Eloquent save of a model instance —
  * including saveQuietly()/updateQuietly()/withoutEvents() — but a write that
  * never touches a model instance is only caught here, statically. Order
- * *creation* is unconstrained (no production creator exists; the one tool is
- * pinned to `pending` below). Ad-hoc code run outside the repository
- * (tinker/psql against production) is outside any test's reach.
+ * *creation* is constrained only by an exact allowlist (the canonical
+ * OrderCreationService and the one legacy dev tool, both pinned to `pending`
+ * below; OrderItemBoundaryTest rejects any third creator). Ad-hoc code run
+ * outside the repository (tinker/psql against production) is outside any
+ * test's reach.
  *
  * The detectors are pure functions over a `path => code` map so that
  * "scanner self-tests" below can feed them synthetic violations and prove they
@@ -236,23 +240,29 @@ function orderBoundaryDomainWriteCalls(array $files): array
 // Real scans of the real tree
 // ---------------------------------------------------------------------
 
-it('lets only the canonical lifecycle service, the Order model, and the test-only creation tool mention the order status column', function () {
+it('lets only the canonical lifecycle service, the Order model, the canonical creation service, and the legacy test-only creation tool mention the order status column', function () {
     $allowed = [
         'app/Domain/Orders/Services/OrderLifecycleService.php', // the one writer
         'app/Models/Order.php',                                  // fillable, relation, runtime guard
-        'app/Console/Commands/CreateTestStripeOrder.php',        // creation at `pending` only — see next test
+        'app/Domain/Orders/Services/OrderCreationService.php',   // canonical creation at `pending` only — see next test
+        'app/Console/Commands/CreateTestStripeOrder.php',        // legacy creation at `pending` only — see next test
     ];
 
     expect(orderBoundaryStatusColumnOffenders(orderBoundaryLoad(orderBoundaryProductionRoots()), $allowed))->toBe([]);
 });
 
-it('keeps the test-only creation tool creating Orders at pending, never at another status', function () {
-    $code = orderBoundaryLoad(['app/Console/Commands'])['app/Console/Commands/CreateTestStripeOrder.php'];
+it('keeps every production Order creator creating Orders at pending, never at another status', function () {
+    $files = orderBoundaryLoad(['app']);
 
-    preg_match_all("/'order_status_id'\s*=>\s*([^,\n]+)/", $code, $matches);
+    foreach ([
+        'app/Console/Commands/CreateTestStripeOrder.php',
+        'app/Domain/Orders/Services/OrderCreationService.php',
+    ] as $path) {
+        preg_match_all("/'order_status_id'\s*=>\s*([^,\n]+)/", $files[$path], $matches);
 
-    expect($matches[1])->toHaveCount(1)
-        ->and(trim($matches[1][0]))->toBe("OrderStatus::bySlugOrFail('pending')->id");
+        expect($matches[1])->toHaveCount(1, $path)
+            ->and(trim($matches[1][0]))->toBe("OrderStatus::bySlugOrFail('pending')->id", $path);
+    }
 });
 
 it('never lets production code write the orders table through the query builder or raw SQL', function () {
@@ -272,11 +282,24 @@ it('keeps the Orders domain free of any Payments-domain dependency and of every 
     expect(orderBoundaryDomainDependencyOffenders(orderBoundaryLoad(['app'])))->toBe([]);
 });
 
-it('contains exactly one write-shaped call in the Orders domain: the canonical compare-and-set UPDATE on Order (ORDER-01, ORDER-12)', function () {
+it('contains exactly these write-shaped calls in the Orders domain: the lifecycle compare-and-set UPDATE on Order (ORDER-01, ORDER-12) and the creation service\'s forceCreate + one order_items insert (ORDER-ITEM-10, ORDER-ITEM-18)', function () {
     $files = orderBoundaryLoad(['app']);
     $calls = orderBoundaryDomainWriteCalls($files);
 
-    expect($calls)->toBe(['app/Domain/Orders/Services/OrderLifecycleService.php: ->update('])
+    // Exact, per-file pin — adding any write to either service, or any write
+    // in a third Orders-domain file, fails this test.
+    expect($calls)->toBe([
+        'app/Domain/Orders/Services/OrderCreationService.php: ->insert(',
+        'app/Domain/Orders/Services/OrderCreationService.php: ::forceCreate(',
+        'app/Domain/Orders/Services/OrderCreationService.php: DB::table(',
+        'app/Domain/Orders/Services/OrderLifecycleService.php: ->update(',
+    ])
+        ->and($files['app/Domain/Orders/Services/OrderCreationService.php'])
+        ->toMatch('/Order::forceCreate\(/')
+        ->and($files['app/Domain/Orders/Services/OrderCreationService.php'])
+        ->toMatch('/\'is_line_backed\'\s*=>\s*true/')
+        ->and($files['app/Domain/Orders/Services/OrderCreationService.php'])
+        ->toMatch('/DB::table\(\'order_items\'\)->insert\(/')
         ->and($files['app/Domain/Orders/Services/OrderLifecycleService.php'])
         ->toMatch('/Order::query\(\)\s*->whereKey\([^;]*?->where\(\s*\'order_status_id\'[^;]*?->update\(/s');
 });

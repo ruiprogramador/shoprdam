@@ -14,7 +14,17 @@ use Illuminate\Database\QueryException;
  * Manual, test-mode-only tool: creates a real Order + Stripe payment so the
  * Stripe integration can be exercised end-to-end against Stripe's real API
  * (`stripe listen` + `stripe payment_intents confirm`), without needing a
- * checkout UI. Not a business feature — a validation tool. Deliberately
+ * checkout UI. Not a business feature — a validation tool.
+ *
+ * Deliberately a LEGACY producer, not the canonical Order path: it creates a
+ * line-less Order with a caller-typed amount (no Product, no OrderItem), the
+ * same shape every Order had before feat/order-items. The canonical creation
+ * boundary is App\Domain\Orders\Services\OrderCreationService
+ * (docs/orders/ORDER-ITEMS.md); this tool intentionally does not use it —
+ * making it do so would mean inventing a throwaway Product in the Store's real
+ * catalog just to test a payment provider — and
+ * tests/Architecture/OrderItemBoundaryTest pins that it stays this way.
+ * Legacy Orders remain payable exactly as before. Deliberately
  * stays Stripe-specific (provider/method hardcoded to stripe/card) — it's
  * test tooling for one provider, not a generic checkout simulator.
  *

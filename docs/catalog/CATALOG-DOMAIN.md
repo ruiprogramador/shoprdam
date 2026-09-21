@@ -5,7 +5,10 @@ here is either evidenced by production code, a database constraint, or a test
 cited by name. Where something is **not** implemented, this document says so
 and says why, rather than describing an aspiration as fact.
 
-See also: `docs/financial/INVARIANTS.md` (`CROSS-XX`), `docs/financial/ARCHITECTURE.md`.
+See also: `docs/financial/INVARIANTS.md` (`CROSS-XX`), `docs/financial/ARCHITECTURE.md`,
+`docs/orders/ORDER-ITEMS.md` (`ORDER-ITEM-XX` — the OrderItem snapshot domain
+added by `feat/order-items`, which this document's §5, §8 and §13 pointed
+forward to; those sections now describe implemented reality).
 
 ## 1. Scope
 
@@ -92,11 +95,10 @@ own precedent exactly (`^\d+(?:\.\d{1,2})?$`, `bcadd` to normalize) —
 settlement.** `ProductService` never creates or mutates a `StoreWallet`,
 `StoreWalletTransaction`, `Payment`, or calls `WalletTransactionService`/
 `PaymentService` — enforced by `CatalogDomainBoundaryTest`'s dependency scan
-and exercised directly in `ProductServiceTest`. A future `OrderItem` is
-expected to **snapshot** the commercial values (name, price, currency) at the
-moment of sale rather than re-reading a Product that may have since changed —
-this branch does not implement that snapshot, only states the expectation for
-`feat/order-items` to honor.
+and exercised directly in `ProductServiceTest`. `OrderItem` (implemented by
+`feat/order-items`, `docs/orders/ORDER-ITEMS.md`) **snapshots** the commercial
+values (name, price, currency) at order creation and never re-reads a Product
+that may have since changed. This branch itself implemented no such snapshot.
 
 **Currency is always explicit, never derived.** `StoreWallet`'s own
 `unique(store_id, currency_id)` proves a Store can operate more than one
@@ -151,18 +153,22 @@ in production code today — `Product::query()->...->forceDelete()`,
 `DELETE FROM products`/`TRUNCATE products` SQL. As of this writing that scan
 finds zero occurrences of any of those shapes.
 
-**What this is not:** a database-level constraint. There is still no foreign
-key into `products` to provide a CROSS-14-style backstop the way a
-`restrictOnDelete()` child row protects `stores`/`currencies` today (§4) —
-that only arrives once `feat/order-items` adds `order_items.product_id` with
-its own `restrictOnDelete()`. Until then, "Product cannot be hard-deleted" is
-true only in the sense that **no code path in the current tree attempts
-it, and the two guards above would catch most ways someone might try** — not
-in the sense that the database itself refuses the operation. A raw SQL
-string built at runtime, an unusual whitespace/quoting style the text scan
-does not anticipate, or `psql`/`tinker` run directly against the database
-are all outside what either guard can see. See CATALOG-09 (§12) for the
-precise, intentionally unglamorous status this earns.
+**What changed with `feat/order-items`:** `order_items.product_id` is now a
+`restrictOnDelete()` foreign key into `products`
+(`OrderItemSchemaDeletePolicyTest` reads the migrated constraint and proves
+the refusal by attempting the delete). The **database itself now refuses to
+hard-delete any Product that an OrderItem references.**
+
+**What this still is not:** an absolute guarantee. The FK protects only
+Products that have at least one OrderItem. A Product with **zero** OrderItems
+can still be hard-deleted by any write that bypasses the two guards above
+(`OrderItemSchemaDeletePolicyTest` proves that too — "the backstop is per
+referenced row, not absolute"). For those Products the situation is unchanged:
+**no code path in the current tree attempts it, and the two guards above would
+catch most ways someone might try.** A raw SQL string built at runtime, an
+unusual whitespace/quoting style the text scan does not anticipate, or
+`psql`/`tinker` run directly against the database remain outside what either
+guard can see. See CATALOG-09 (§12).
 
 ## 9. The canonical mutation boundary
 
@@ -240,20 +246,24 @@ semantics honest, never as a concurrency guarantee.
 | CATALOG-06 | ProductService never mutates Wallet/Payment state | **ENFORCED** — architecture scan + `ProductServiceTest` |
 | CATALOG-07 | `is_active` is catalog visibility, never inventory availability, and never hides rows from ordinary queries | **ENFORCED** — `HasActiveScope` is local-only; `ProductServiceTest` |
 | CATALOG-08 | Deletion is soft by default | **ENFORCED** — `SoftDeletes`, `forceDelete()`/`forceDeleteQuietly()` throw |
-| CATALOG-09 | Normal production Product hard deletion is prohibited: instance-level `forceDelete` APIs are blocked at runtime; known production query-builder force-delete/mass-delete patterns are rejected by architecture tests; database-level historical protection does not exist yet because no `OrderItem` references Product | **PARTIALLY ENFORCED** — runtime + static layers cover every *known* production path (§8); no database constraint exists, so this is not "hard deletion is impossible," only "no code path in the current tree does it, and most ways someone might try are caught" |
+| CATALOG-09 | Normal production Product hard deletion is prohibited: instance-level `forceDelete` APIs are blocked at runtime; known production query-builder force-delete/mass-delete patterns are rejected by architecture tests; and, since `feat/order-items`, the database refuses to hard-delete any Product an `OrderItem` references (`order_items.product_id` `restrictOnDelete()`) | **PARTIALLY ENFORCED** — for a Product referenced by an OrderItem the database backstop is real and tested (`OrderItemSchemaDeletePolicyTest`, ORDER-ITEM-13). A Product with no OrderItem has no such backstop, so this is still not "hard deletion is impossible": for those rows it remains "no code path in the current tree does it, and most ways someone might try are caught" |
 | CATALOG-10 | No FK from `products` ever cascades | **ENFORCED** — `ProductSchemaDeletePolicyTest`, `CatalogDomainBoundaryTest` |
 | CATALOG-11 | Every business mutation goes through `ProductService` | **ENFORCED** — architecture scan (`CatalogDomainBoundaryTest`) |
 | CATALOG-12 | Creation is atomic: ownership, price, currency and visibility all land in one write | **ENFORCED** — single `Product::create()` call, wrapped in `DB::transaction()` |
-| CATALOG-13 | No `OrderItem`/inventory concept is introduced by this branch | **ENFORCED** — forbidden-field scan; not implemented by design (§1) |
+| CATALOG-13 | No `OrderItem`/inventory concept is introduced *into the Catalog domain* | **ENFORCED** — forbidden-field scan over Product/ProductService/the products migration; the Catalog domain still has no Orders dependency. (`OrderItem` itself now exists in `feat/order-items`, outside the Catalog domain — it depends on Product, never the reverse.) |
 | CATALOG-14 | Concurrent administrative writes cannot corrupt a Product into an impossible state | **N/A — not a guarantee this branch makes** (§10); ordinary last-write-wins is accepted because no impossible state or financial effect exists at this layer |
 
 ## 13. Future contracts (not implemented here)
 
-**`OrderItem` (for `feat/order-items`):** expected to hold a foreign key to
-`products.id` (`restrictOnDelete()`, per CROSS-14 discipline) and to
-**snapshot** `name`, `price_amount` and `currency_id` at sale time — never to
-re-read a live Product for historical amounts, since a Product's price can
-change after the sale (§5).
+**`OrderItem` — implemented (`feat/order-items`, `docs/orders/ORDER-ITEMS.md`):**
+holds a foreign key to `products.id` (`restrictOnDelete()`, per CROSS-14
+discipline) and **snapshots** `product_name`, `unit_price_amount` and
+`currency_id` from the Product at order creation — it never re-reads a live
+Product for historical amounts (§5). Product rename / repricing / currency
+change / deactivation / soft deletion therefore never alters an existing
+OrderItem (`OrderCreationServiceTest`, `OrderItemPaymentIntegrationTest`).
+Only *active, not soft-deleted* Products can be newly ordered (`is_active` =
+"may be offered for new commercial activity", §7).
 
 **Inventory identity (for `feat/inventory-reservations`):** whatever holds
 stock/reservation state is expected to reference `products.id` the same way.
@@ -264,7 +274,7 @@ own design — this branch neither assumes nor forecloses either answer.
 **Product → Variant migration risk:** if a future product decision requires
 variants/options, `products` becomes the "parent" concept and a new
 `product_variants` table would hold the sellable identity instead — a
-migration that changes what `order_items.product_id` (once it exists) points
+migration that changes what `order_items.product_id` points
 to. This branch does not attempt to pre-shape the schema for that outcome
 (e.g. no mandatory default variant), since inventing it now would be
 speculation with no product decision behind it.
@@ -276,7 +286,10 @@ speculation with no product decision behind it.
    repository evidence either forbidding or requiring free products, and
    inventing a prohibition would be exactly as much a guess as accepting it.
    This is the narrowest honest rule: reject only what is unambiguous
-   (malformed input, negative amounts).
+   (malformed input, negative amounts). Note the distinction introduced by
+   `feat/order-items`: a `0.00` **Product** stays valid, but a canonical
+   **Order** whose total is `0.00` is refused by `OrderCreationService` (no
+   free-order settlement policy exists) — see `docs/orders/ORDER-ITEMS.md` §5.
 2. **Public storefront terminology** ("seller", "vendor", "shop") — no
    catalog frontend exists yet; nothing here creates a `Vendor` abstraction.
 3. **Digital/unlimited-product semantics** — deferred to inventory design
