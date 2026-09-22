@@ -1,11 +1,17 @@
 <?php
 
+use App\Domain\Catalog\Models\Product;
+use App\Domain\Catalog\Services\ProductService;
+use App\Domain\Orders\Services\OrderCreationService;
 use App\Domain\Wallet\WalletTransactionReference;
+use App\Models\Order;
 use App\Models\Store;
 use App\Models\StoreWallet;
 use App\Models\StoreWalletTransaction;
 use App\Services\Wallet\WalletTransactionService;
+use Illuminate\Support\Facades\DB;
 use Illuminate\Testing\TestResponse;
+use Nnjeim\World\Models\Currency;
 
 function recordTransaction(
     string $category,
@@ -115,7 +121,7 @@ function stripeChargeRefundedEvent(string $chargeId, string $paymentIntentId, ar
  * notification's own `id` (see EasyPayWebhookController), not verifying the
  * delivery itself.
  */
-function postEasyPayWebhook(array $notification): Illuminate\Testing\TestResponse
+function postEasyPayWebhook(array $notification): TestResponse
 {
     return test()->postJson(route('easypay.webhook'), $notification);
 }
@@ -146,3 +152,53 @@ function easyPayPaymentBody(string $id, string $orderId, array $overrides = []):
     ], $overrides);
 }
 
+// ---------------------------------------------------------------------
+// feat/inventory-reservations fixtures (docs/inventory/INVENTORY-RESERVATIONS.md).
+// Stock is seeded with a raw insert: production code has NO way to create
+// or set stock (no setStock), so a fixture is the only legitimate source.
+// ---------------------------------------------------------------------
+
+function inventoryProduct(Store $store, string $price = '10.00', string $name = 'Widget'): Product
+{
+    return app(ProductService::class)->create(
+        $store,
+        $name,
+        $price,
+        Currency::query()->where('code', 'EUR')->value('id'),
+    );
+}
+
+/** Seeds one Inventory row for the Product and returns its id. */
+function inventorySeed(Product|int $product, int $onHand, int $reserved = 0): int
+{
+    return DB::table('inventories')->insertGetId([
+        'product_id' => $product instanceof Product ? $product->id : $product,
+        'on_hand_quantity' => $onHand,
+        'reserved_quantity' => $reserved,
+        'created_at' => now(),
+        'updated_at' => now(),
+    ]);
+}
+
+/** @return array{on_hand: int, reserved: int, available: int} straight from the database */
+function inventoryState(Product|int $product): array
+{
+    $row = DB::table('inventories')
+        ->where('product_id', $product instanceof Product ? $product->id : $product)
+        ->first();
+
+    return [
+        'on_hand' => (int) $row->on_hand_quantity,
+        'reserved' => (int) $row->reserved_quantity,
+        'available' => (int) $row->on_hand_quantity - (int) $row->reserved_quantity,
+    ];
+}
+
+/** @param  array<int, array{0: Product, 1: int}>  $pairs */
+function inventoryOrder(Store $store, array $pairs): Order
+{
+    return app(OrderCreationService::class)->create(
+        $store,
+        array_map(fn ($pair) => ['product' => $pair[0], 'quantity' => $pair[1]], $pairs),
+    );
+}
