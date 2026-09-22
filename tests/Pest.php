@@ -1,5 +1,8 @@
 <?php
 
+use Illuminate\Foundation\Testing\RefreshDatabase;
+use Tests\TestCase;
+
 /*
 |--------------------------------------------------------------------------
 | Test Case
@@ -11,8 +14,8 @@
 |
 */
 
-pest()->extend(Tests\TestCase::class)
-    ->use(Illuminate\Foundation\Testing\RefreshDatabase::class)
+pest()->extend(TestCase::class)
+    ->use(RefreshDatabase::class)
     ->in('Feature');
 
 /*
@@ -64,3 +67,19 @@ function something()
 {
     // ..
 }
+
+/*
+|--------------------------------------------------------------------------
+| Concurrency (opt-in, real database engine)
+|--------------------------------------------------------------------------
+|
+| tests/Concurrency is NOT part of any phpunit.xml suite. It needs a
+| disposable local MySQL *_concurrency_test database with real commits, so it
+| deliberately does not use RefreshDatabase (a wrapping transaction would hide
+| every write from the other connections). See
+| tests/Concurrency/InventoryMysqlConcurrencyTest.php.
+|
+*/
+
+pest()->extend(TestCase::class)
+    ->in('Concurrency');
