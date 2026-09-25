@@ -39,15 +39,26 @@ Wallet ledger.
   touches the ledger — see that test's second assertion).
 - **`App\Domain\Payments\Services\PaymentEventProcessor`** is the only class
   allowed to translate a provider-neutral payment outcome into a Wallet
-  effect (`record()`/`confirm()`/`markFailed()`/`reverse()` calls) —
-  enforced for the admin recovery surface by
-  `tests/Architecture/PaymentRecoveryNoDirectWalletMutationTest`.
-- **`App\Domain\Payouts\Services\PayoutEventProcessor`** is the equivalent
-  for Payouts, with one deliberate asymmetry from Payments: it never calls
-  `WalletTransactionService::reverse()` itself — only
-  **`App\Domain\Payouts\Services\PayoutService::abandon()`** does, and
+  effect: `confirm()` (settlement), `markFailed()` (attempt failure) and
+  `reverse()` (full refund) on the pending/completed `sale` — enforced for
+  the admin recovery surface by
+  `tests/Architecture/PaymentRecoveryNoDirectWalletMutationTest`. The pending
+  `sale` itself is created earlier, at claim time, by
+  **`App\Domain\Payments\Services\PaymentService::claimProviderReference()`**
+  through `record()` (see `MONEY-FLOWS.md` §A/§J).
+- **Payouts have no event-driven Wallet effect.**
+  `App\Domain\Payouts\Services\PayoutEventProcessor` never calls the Wallet:
+  the reservation debit posted at request time *is* the settlement
+  (`MONEY-FLOWS.md` §F). Both Payout Wallet effects live in
+  **`App\Domain\Payouts\Services\PayoutService`**: `request()` posts the
+  `withdrawal` through `record()`, and `abandon()` posts the single
+  `withdrawal_reversal` through `reverse()` —
   `tests/Architecture/PayoutRecoveryNoDirectWalletMutationTest` asserts this
   is the *only* call site of `->reverse(` anywhere in `App\Domain\Payouts`.
+- These three classes — `PaymentService`, `PaymentEventProcessor`,
+  `PayoutService` — are the only production callers of
+  `WalletTransactionService` at all, asserted as an exact set by
+  `tests/Architecture/WalletLedgerCanonicalCallerTest`.
 - Nothing in `app/Http/Controllers/**`, `app/Console/Commands/**`, or any
   provider adapter (`App\Payments\*`, `App\Payouts\*`) ever constructs a
   Wallet effect directly. Every mutating admin action

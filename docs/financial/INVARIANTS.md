@@ -51,7 +51,7 @@ branch after verifying each one against production code.
 | PAYOUT-11 | If the provider executes but the response is lost, durable local state allows discovery/recovery | ENFORCED | Durable pre-call `PayoutAttempt` row + deterministic idempotency key |
 | PAYOUT-12 | An already-succeeded payout can never be resent as a new transfer | ENFORCED | `PayoutStatus::isTerminal()` blocks `createDurableAttempt()` |
 | PAYOUT-13 | Payout currency is explicit and matches the Wallet | ENFORCED | `Payout.currency_id` snapshot, resolved from the wallet at request time |
-| PAYOUT-14 | Never use float for money | ENFORCED | bcmath end to end, verified against Laravel's own `decimal` cast source (`BigDecimal::of((string) $value)`) |
+| PAYOUT-14 | Never use float for money | ENFORCED | bcmath end to end, verified against Laravel's own `decimal` cast source (`BigDecimal::of((string) $value)`); no float in money-bearing code, `tests/Architecture/MoneyNoFloatTest` |
 | PAYOUT-15 | A crash at any point never permits double debit nor an unreconcilable state | ENFORCED | See `FAILURE-MODEL.md` crash matrix |
 | PAYOUT-16 | Controllers/admin/webhooks never alter the Wallet balance directly | ENFORCED | `PayoutRecoveryNoDirectWalletMutationTest` |
 | PAYOUT-17 | There is a single canonical payout settlement path | ENFORCED | Same architecture test, second assertion (`->reverse(` scan) |
@@ -85,7 +85,7 @@ branch after verifying each one against production code.
 | CROSS-09 | Provider timeout/unknown outcome is never automatically treated as proof of financial failure | `PaymentAttemptRecoveryService`, `PayoutAttemptRecoveryService` | ENFORCED | See `FAILURE-MODEL.md` Timeout semantics |
 | CROSS-10 | Provider/reference settlement reaches the exact historical attempt, never just "current attempt" | `PaymentEventProcessor::markSettled()`, `PayoutEventProcessor::findAttempt()` | ENFORCED | `PaymentEventProcessorExactAttemptSettlementTest`, `PayoutEventProcessorTest` "EXACT CURRENT ATTEMPT ISOLATION" |
 | CROSS-11 | Currency A can never mutate a Wallet of currency B | `WalletTransactionService::record()` (explicit `StoreWallet` param) | ENFORCED | `WalletLedgerAuditorTest` "LEDGER-06: currency isolation" |
-| CROSS-12 | Controllers/admin/webhooks cannot write `wallet.balance` directly or fabricate an economic effect outside the canonical domain path | `WalletTransactionService` sole-writer design | ENFORCED | `WalletLedgerSingleWriterTest`, `PaymentRecoveryNoDirectWalletMutationTest`, `PayoutRecoveryNoDirectWalletMutationTest` |
+| CROSS-12 | Controllers/admin/webhooks cannot write `wallet.balance` directly or fabricate an economic effect outside the canonical domain path | `WalletTransactionService` sole-writer design | ENFORCED | `WalletLedgerSingleWriterTest`, `WalletLedgerCanonicalCallerTest`, `PaymentRecoveryNoDirectWalletMutationTest`, `PayoutRecoveryNoDirectWalletMutationTest` |
 | CROSS-13 | A terminal succeeded cannot be resent/re-executed to duplicate an economic effect | `PaymentAttemptStatus`/`PayoutStatus` `isTerminal()` gates | ENFORCED | `PaymentServiceGatingTest`, `PayoutAttemptLifecycleTest` "refuses to create a new attempt for an already-terminal payout" |
 | CROSS-14 | Relevant financial history is append-only and cannot disappear via operational cascade | Payouts: `PayoutService`/migrations. Payments/Wallet: `database/migrations/2026_09_16_180000_restrict_financial_history_cascades.php` (DB) + `App\Http\Controllers\User\ProfileController::destroy()` (app) | **ENFORCED** | DB-level: all six Payments/Wallet FKs (`payment_attempts.payment_id`, `payments.order_id`, `store_wallet_transactions.store_wallet_id`, `orders.store_id`, `store_wallets.store_id`, `stores.user_id`) are `restrictOnDelete()`, verified against real `PRAGMA foreign_key_list` output by `PaymentsSchemaDeletePolicyTest` (mirrors Payouts' own `PayoutSchemaDeletePolicyTest`). App-level: `ProfileController::destroy()` refuses to hard-delete a User who owns any Store — trashed or not — before any mutation, never surfacing the constraint as an unhandled `QueryException`; see `ProfileAccountDeletionFinancialHistoryTest` (scenarios A1–A7: no Store, empty Store, soft-deleted Store, Wallet/ledger history, Payment history, Payout history, and a mixed case). Migration safety (existing rows survive `down()`+`up()`, the live FK policy genuinely flips both ways) is proven — without touching a real database — by `FinancialHistoryCascadeMigrationSafetyTest`. Regression coverage against a future migration/model silently reopening this: `FinancialHistoryDeletePolicyTest`. See `FAILURE-MODEL.md`'s "Critical finding" for the original reproduction and its resolution, including what re-running the migration's `down()` would reopen. |
 
@@ -148,11 +148,15 @@ Every "ENFORCED" status backed by a lock or CAS has been verified as a real
 by a **sequential simulation** on SQLite (pre-inserting the "other worker
 already committed" state, then calling the real code path) — the same
 documented pattern used throughout this codebase since
-`PaymentAttemptIdempotencyKeyUniquenessTest`. **No test in this codebase
-runs two genuinely concurrent database transactions against MySQL or
-PostgreSQL.** This is real coverage of the locking *primitive* the
-guarantee depends on, not proof against every possible interleaving under
-real concurrent load. Stated once here rather than repeated on every row.
+`PaymentAttemptIdempotencyKeyUniquenessTest`. **No test of any invariant in
+this registry (financial or `ORDER-XX`) runs two genuinely concurrent
+database transactions against MySQL, MariaDB or PostgreSQL.** This is real
+coverage of the locking *primitive* the guarantee depends on, not proof
+against every possible interleaving under real concurrent load. Stated once
+here rather than repeated on every row. (The Inventory domain, outside this
+registry, does have its own real multi-process/multi-connection proof —
+`tests/Concurrency`, see `docs/inventory/INVENTORY-RESERVATIONS.md` and
+`docs/architecture/DATABASE-SUPPORT.md` §6.)
 
 ## Known Non-Guarantees / Not Supported / Dormant
 
@@ -174,7 +178,9 @@ column exists" as "this is a supported feature":
   application guard clauses (LEDGER-02). A direct `UPDATE` against the table
   bypassing `WalletTransactionService` would not be stopped by the schema.
 - **No true parallel (PostgreSQL/MySQL multi-connection) concurrency tests
-  exist anywhere in this codebase** — see the Concurrency note above.
+  exist for any invariant in this registry** — see the Concurrency note
+  above. Only the Inventory domain has one (`tests/Concurrency`), and it
+  proves Inventory invariants only.
 - **No automatic/bank payout provider exists.** `ManualPayoutProvider` is
   the only registered driver; every payout requires a human to execute the
   transfer and confirm it.
