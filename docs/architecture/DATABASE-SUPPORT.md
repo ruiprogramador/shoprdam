@@ -44,7 +44,7 @@ result was extrapolated from a different engine.
 | Isolation level (default) | REPEATABLE READ | REPEATABLE READ | READ COMMITTED | serializable (single-writer) | not evaluated |
 | CONFIGURABLE | YES | YES | YES | YES | YES |
 | SCHEMA-COMPATIBLE | **YES** — via baseline (`database/schema/mysql-schema.sql`), proven: empty DB → `migrate` → "Nothing to migrate", 46 tables | **YES** — via baseline (`mariadb-schema.sql`), proven identically | **YES** — via a direct migration replay, proven fresh this round: no baseline exists or is needed (§3, §11) | YES (proven — every default-suite test migrates it) | YES (compiled clean, analysis only — not a target) |
-| FUNCTIONALLY COMPATIBLE | **YES** — 399/399 real-engine financial tests | **YES** — 399/399 | **YES** — 399/399 (11 failures found and fixed this round — §5) | YES (1009 SQLite tests) | not evaluated |
+| FUNCTIONALLY COMPATIBLE | **YES** — 399/399 real-engine financial tests | **YES** — 399/399 | **YES** — 399/399 (11 failures found and fixed this round — §5) | YES (the full default test suite runs on it) | not evaluated |
 | TRANSACTIONALLY COMPATIBLE | **YES** | **YES** — after the `innodb_snapshot_isolation` fix (§6) | **YES** — after the savepoint fix to `PaymentService`/`PaymentEventProcessor` (§5) | Single-writer; proves algorithm shape, not lock/abort semantics (§8) | not evaluated |
 | CONCURRENCY-COMPATIBLE | **YES** — real, independent-OS-process proof, 16/16 | **YES** — real proof, 16/16, after the retry + probe fixes (§6) | **YES** — real proof, 16/16 | **NO** — single-writer by construction (§8) | not evaluated |
 | TESTED | **YES** | **YES** | **YES** | YES | NO |
@@ -230,7 +230,8 @@ only SQLite).
 
 ## 8. SQLite's honest role
 
-Unchanged: fast default test-suite engine (1009 tests, ~2 minutes) and a
+Unchanged: fast default test-suite engine (the whole default suite; about
+2 minutes as of this round) and a
 genuine proof of algorithm/SQL-shape/state-machine correctness. Not, and
 never claimed to be, a production concurrency engine (DBPORT-11).
 

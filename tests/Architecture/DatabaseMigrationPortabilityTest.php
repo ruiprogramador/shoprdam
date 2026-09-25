@@ -56,20 +56,21 @@ use Illuminate\Database\PostgresConnection;
  * against a disposable instance; see docs/architecture/DATABASE-SUPPORT.md
  * for exactly what has and hasn't been run.
  *
- * ## Known, tracked, currently-unresolved findings
+ * ## Known, permanent historical identifiers
  *
  * `payment_reconciliation_findings_provider_provider_reference_index` (65
  * chars) and `payment_provider_events_provider_provider_reference_status_index`
- * (64 chars, legal on MySQL, still 1 byte over Postgres's limit) are BOTH
- * pre-existing, already-established migrations (see
- * tests/Architecture/EstablishedMigrationImmutabilityTest.php — DBPORT-03
- * forbids editing them in place). Fixing them for real requires a
- * fresh-install baseline decision this branch could not make without a live
- * database to generate one honestly (see the branch report §E/§F) — so they
- * are asserted here as an EXACT, closed set, not swallowed with a blanket
- * "expected failures" allowance. Any change to this set — whether a NEW
- * regression or the deliberate resolution of one of these two — must touch
- * this test explicitly; neither can happen silently.
+ * (64 chars, legal on MySQL, still 1 byte over Postgres's limit) both live in
+ * pre-existing, already-established migrations. Established migrations are
+ * immutable (tests/Architecture/EstablishedMigrationImmutabilityTest.php —
+ * DBPORT-03), so these identifiers stay in the history permanently. Fresh
+ * install does not depend on them being fixed: it is resolved per engine by
+ * the schema baselines for MySQL/MariaDB (database/schema/*-schema.sql) and a
+ * direct replay on PostgreSQL — see docs/architecture/DATABASE-SUPPORT.md
+ * §3/§11. They are asserted here as an EXACT, closed set, not swallowed with a
+ * blanket "expected failures" allowance, so any NEW over-limit identifier
+ * still fails this test; any change to the set must touch this test
+ * explicitly and can never happen silently.
  */
 function migrationPortabilityFiles(): array
 {
@@ -154,7 +155,7 @@ function migrationPortabilitySql(array $log): string
 // MySQL / MariaDB — 64-byte identifier limit (hard rejection)
 // ---------------------------------------------------------------------
 
-it('compiles the complete migration history through a real MySQL schema grammar with no identifier over 64 characters, beyond the one known pending defect', function () {
+it('compiles the complete migration history through a real MySQL schema grammar with no identifier over 64 characters, beyond the one known historical identifier', function () {
     $sql = migrationPortabilitySql(migrationPortabilityMysqlLog());
 
     preg_match_all('/`([^`]+)`/', $sql, $matches);
@@ -175,7 +176,7 @@ it('compiles the complete migration history through a real MySQL schema grammar 
 // PostgreSQL — 63-byte identifier limit (silent truncation, not rejection)
 // ---------------------------------------------------------------------
 
-it('compiles the complete migration history through a real PostgreSQL schema grammar with no identifier over 63 characters, beyond the two known pending defects', function () {
+it('compiles the complete migration history through a real PostgreSQL schema grammar with no identifier over 63 characters, beyond the two known historical identifiers', function () {
     $sql = migrationPortabilitySql(migrationPortabilityPostgresLog());
 
     preg_match_all('/"([^"]+)"/', $sql, $matches);

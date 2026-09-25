@@ -3,6 +3,12 @@
 Implemented truth only. Where something is **not** implemented, or is proven
 only partially, this document says so.
 
+**Evidence status.** This is the design record of `feat/inventory-reservations`.
+Where it cites MySQL 8.0.30, that is the branch's **original, historical**
+real-engine evidence. **Current** real-engine evidence per engine, engine
+support and fresh-install/baseline status are tracked in
+`docs/architecture/DATABASE-SUPPORT.md`, which is authoritative for them.
+
 ## 0. Summary
 
 | | |
@@ -12,8 +18,8 @@ only partially, this document says so.
 | Why the last three | §12 (late payment after release) and §13 (no safe commit point) — each is an unresolved product/financial decision, not an implementation detail |
 | Production effect today | **none.** No production code can create stock (`no setStock`), and nothing calls the service (an empty caller allowlist is asserted by `InventoryBoundaryTest`). This branch establishes the inventory *domain contract*; wiring it is a decision (§12, §18) |
 | Payment/Wallet/Order-lifecycle code changed | **no** — zero lines |
-| Real-engine proof | **MySQL 8.0.30 / InnoDB / REPEATABLE READ: proven** with independent OS-process connections (`tests/Concurrency`, §11). It found and fixed two real InnoDB deadlocks invisible on SQLite. **PostgreSQL, MariaDB and other MySQL versions/isolation levels: not run** |
-| What this branch is | a *reservation-domain* contract that is correct on the engine it was proven on. It is **not** an operational inventory system: no stock creation, no stock control, no callers, no expiry, no payment/checkout wiring (§21) |
+| Real-engine proof | **Historical (this branch):** MySQL 8.0.30 / InnoDB / REPEATABLE READ, proven with independent OS-process connections (`tests/Concurrency`, §11); it found and fixed two real InnoDB deadlocks invisible on SQLite. **Current:** proven on MySQL, MariaDB and PostgreSQL at each engine's default isolation level — see `docs/architecture/DATABASE-SUPPORT.md` §6. Non-default isolation levels: not run |
+| What this branch is | a *reservation-domain* contract that is correct on the engines it has been proven on (`docs/architecture/DATABASE-SUPPORT.md` §6). It is **not** an operational inventory system: no stock creation, no stock control, no callers, no expiry, no payment/checkout wiring (§21) |
 
 ## 1. Audit findings (before any change)
 
@@ -110,7 +116,7 @@ The last line is a **database CHECK** (§5), and `reserve` cannot produce a viol
 | CHECK status ∈ {reserved, committed, released} **and** evidence: `reserved` ⇒ both timestamps null; `committed` ⇒ `committed_at` only; `released` ⇒ `released_at` only | inventory_reservations | a half-written terminal transition cannot be stored |
 | every FK `RESTRICT` | both | history is never cascade-deleted (INVENTORY-18) |
 
-**Portability, stated honestly.** On MySQL/MariaDB/PostgreSQL these are named `ALTER TABLE … ADD CONSTRAINT … CHECK`; on SQLite (dev and test) they are `BEFORE INSERT/UPDATE` triggers, following `create_order_items_table`. **Only the SQLite form is exercised by this repository's tests.** MySQL enforces CHECK only from 8.0.16 (MariaDB 10.2.1); older servers parse and silently ignore it. The CHECKs are a *backstop*; the conditional UPDATE is the guarantee.
+**Portability, stated honestly.** On MySQL/MariaDB/PostgreSQL these are named `ALTER TABLE … ADD CONSTRAINT … CHECK`; on SQLite (dev and test) they are `BEFORE INSERT/UPDATE` triggers, following `create_order_items_table`. The default suites exercise only the SQLite form; the opt-in real-engine suites (`tests/Concurrency`) execute the named CHECKs on MySQL, MariaDB and PostgreSQL themselves. MySQL enforces CHECK only from 8.0.16 (MariaDB 10.2.1); older servers parse and silently ignore it. The CHECKs are a *backstop*; the conditional UPDATE is the guarantee.
 
 There is **no** database rule stopping a terminal reservation from being flipped back by raw SQL, nor a raw `DELETE` of a reservation row. Terminal protection is the CAS in the service + model guards + static scans; a vanished reservation is *detected* (checker), not prevented.
 
@@ -168,11 +174,11 @@ One lock hierarchy everywhere: the **Inventory row first, then its reservation r
 
 ### Reserve idempotency race
 
-`unique(order_item_id)` is the identity. If two identical `reserve()` calls race, the loser's `INSERT` fails on that unique index (only that constraint is recognised — an FK/CHECK violation propagates), its transaction rolls back completely (undoing any counter change), and it re-runs **once**, then observes the winner's rows. Inside a caller-owned REPEATABLE READ transaction the retry may still fail with the duplicate error rather than see the winner — it fails closed, never double-holds.
+`unique(order_item_id)` is the identity. If two identical `reserve()` calls race, the loser's `INSERT` fails on that unique index (only that constraint is recognised — an FK/CHECK violation propagates), its transaction rolls back completely (undoing any counter change), and it retries from a clean transaction — bounded, and in practice the first retry observes the winner's rows. Inside a caller-owned REPEATABLE READ transaction the retry may still fail with the duplicate error rather than see the winner — it fails closed, never double-holds.
 
 ### Timeout / unknown outcome
 
-There is no catch-and-compensate anywhere. An exception, deadlock, lock-wait timeout or crash means the transaction rolled back (or never committed) and stored state is the truth; an unknown outcome is resolved by re-reading it or repeating the idempotent call. Nothing ever increases availability because an exception occurred. Laravel's `DB::transaction` is used with its default single attempt: a MySQL deadlock (1213) / lock timeout (1205) or a PostgreSQL serialization failure surfaces as an exception to the caller; it is **not** retried automatically. The two FK-lock deadlocks the real-engine tests found are fixed (§11) and none occurs in the exercised scenarios, but that is evidence, not a proof of deadlock freedom: any residual deadlock/lock-wait error would surface to the caller with no partial effect.
+There is no catch-and-compensate anywhere. An exception, deadlock, lock-wait timeout or crash means the transaction rolled back (or never committed) and stored state is the truth; an unknown outcome is resolved by re-reading it or repeating the idempotent call. Nothing ever increases availability because an exception occurred. Laravel's `DB::transaction` is used with its default single attempt: a MySQL deadlock (1213) / lock timeout (1205) or a PostgreSQL serialization failure surfaces as an exception to the caller; it is **not** retried automatically. The one exception is MariaDB's snapshot conflict on a locking read (SQLSTATE `HY000`, driver code `1020`), which is narrowly classified and retried from a clean transaction a bounded number of times — see `docs/architecture/DATABASE-SUPPORT.md` §6. The two FK-lock deadlocks the real-engine tests found are fixed (§11) and none occurs in the exercised scenarios, but that is evidence, not a proof of deadlock freedom: any residual deadlock/lock-wait error would surface to the caller with no partial effect.
 
 ### No provider call under a lock
 
@@ -204,7 +210,13 @@ Rename, reprice, re-currency, deactivate and soft-delete change nothing about a 
 
 * **Mechanism:** one atomic conditional `UPDATE` (reserve / counter moves) + a CAS `UPDATE … WHERE status='reserved'` (terminal transitions) + a unique index (idempotency), with the Inventory row write-locked first (§7). No advisory locks; no `SELECT … FOR UPDATE` decides availability.
 
-### Proven on MySQL 8.0.30 / InnoDB / REPEATABLE READ (production default)
+### Original proof (this branch, historical): MySQL 8.0.30 / InnoDB / REPEATABLE READ (production default)
+
+This subsection and the two after it record this branch's own MySQL run. The
+same scenarios have since been run, independently, on MySQL, MariaDB and
+PostgreSQL (`tests/Concurrency/Inventory{Mysql,Mariadb,Postgres}ConcurrencyTest.php`,
+sharing `ConcurrencyHelpers.php`/`worker.php`); that current evidence, and the
+MariaDB-specific defects it found, are in `docs/architecture/DATABASE-SUPPORT.md` §6.
 
 `tests/Concurrency/InventoryMysqlConcurrencyTest.php` (+ `worker.php`), 16 tests, run twice on a freshly migrated disposable database, identical results. **Every "buyer" is a separate OS process with its own MySQL connection** — not sequential calls on one connection.
 
@@ -244,7 +256,7 @@ Neither ever produced an oversell or a double effect (the counters/CHECKs held);
 
 ### Not proven, and not claimed
 
-* **PostgreSQL, MariaDB, other MySQL versions, other isolation levels (READ COMMITTED, SERIALIZABLE), replicated/clustered setups** — no run. The mechanism is argued valid there (PostgreSQL READ COMMITTED re-evaluates the `WHERE` after a row-lock wait; REPEATABLE READ raises a serialization failure, not an oversell) but **not executed**.
+* **Isolation levels other than each engine's default** (e.g. READ COMMITTED or SERIALIZABLE on MySQL/MariaDB, REPEATABLE READ or SERIALIZABLE on PostgreSQL), **engine versions other than those `docs/architecture/DATABASE-SUPPORT.md` lists, and replicated/clustered setups** — no run. The mechanism is argued valid there (e.g. PostgreSQL REPEATABLE READ raises a serialization failure, not an oversell) but **not executed**. MySQL, MariaDB and PostgreSQL at their default isolation levels are proven — `docs/architecture/DATABASE-SUPPORT.md` §6.
 * Deadlock/lock-wait *freedom* under arbitrary load: the exercised interleavings are 2–4 workers; no soak/scale test. Timeouts (`innodb_lock_wait_timeout`, default 50 s) would surface as exceptions.
 * Contention-scale behavior (throughput, lock queue length under a flash sale) — the design serializes buyers per Inventory row by construction.
 
@@ -263,7 +275,9 @@ DB_DATABASE=<name>_concurrency_test DB_USERNAME=… DB_PASSWORD=… \
 php vendor/pestphp/pest/bin/pest tests/Concurrency
 ```
 
-Note: the repository's migrations had never run on MySQL before this round — `2026_09_17_090000_create_payment_reconciliation_findings_table` (a previous branch) fails on MySQL (index name > 64 characters), so the disposable database used for this suite's own run was prepared by marking that one migration as run. **That defect is still open** — see `docs/architecture/DATABASE-SUPPORT.md` §3 for the full account, including why an in-place edit of that migration (tried on an earlier branch) was reverted under this repository's migration-immutability rule, why a simple forward migration cannot fix a *fresh* MySQL install either, and why the real fix (a Laravel schema-dump baseline) needs a live database this project has not yet had access to. The two inventory migrations, and everything they depend on, migrate cleanly on MySQL 8.0.30 once that one unrelated migration is worked around; database-wide MySQL fresh-install compatibility is tracked centrally in `docs/architecture/DATABASE-SUPPORT.md`, not here.
+MariaDB and PostgreSQL work the same way, each behind its own opt-in flag (`INVENTORY_MARIADB_CONCURRENCY`, `INVENTORY_POSTGRES_CONCURRENCY`) and its own safety guard — see each file's header, `docs/architecture/DATABASE-SUPPORT.md` §16, and the nightly `.github/workflows/real-engine-concurrency.yml`.
+
+Historical note (this branch's own run): the repository's migrations had never run on MySQL before that round — `2026_09_17_090000_create_payment_reconciliation_findings_table` (a previous branch) fails on MySQL (index name > 64 characters), so the disposable database used for that run was prepared by marking that one migration as run. The two inventory migrations, and everything they depend on, migrated cleanly on MySQL 8.0.30 once that one unrelated migration was worked around. Fresh install has since been resolved per engine without editing that historical migration (schema baselines for MySQL/MariaDB, a direct replay on PostgreSQL) — see `docs/architecture/DATABASE-SUPPORT.md` §3/§11, where database-wide fresh-install compatibility is tracked, not here.
 
 ## 12. Expiry and late payment — NOT implemented (STOP condition 9)
 
@@ -338,16 +352,16 @@ Fail-closed at operation time: `reserve` refuses a mismatching existing reservat
 
 | ID | Statement | Status | Runtime | DB | Architecture | Tests | Limitation |
 |---|---|---|---|---|---|---|---|
-| 01 | Reservable quantity never negative via canonical ops | **ENFORCED** | conditional UPDATE predicate | CHECKs `on_hand≥0, reserved≥0, reserved≤on_hand` | statement pin | `InventoryReservationServiceTest` A/B; `InventorySchemaTest` "INVENTORY-01"; CONSERVATION | CHECK only executed on SQLite; a raw write can lower `reserved` (detected) |
-| 02 | stock=1, two concurrent reserve(1) cannot both succeed | **ENFORCED — proven on MySQL 8.0.30/InnoDB; not run on PostgreSQL/MariaDB** | single atomic conditional UPDATE, Inventory row locked first | CHECK backstop (demonstrated by probe) | SQL-shape/statement pins | "C" (SQLite algorithm tests); `tests/Concurrency` stock=1 scenarios (2 independent connections, verified lock wait; 4-way barrier ×10) | other engines/isolation levels not executed (§11) |
+| 01 | Reservable quantity never negative via canonical ops | **ENFORCED** | conditional UPDATE predicate | CHECKs `on_hand≥0, reserved≥0, reserved≤on_hand` | statement pin | `InventoryReservationServiceTest` A/B; `InventorySchemaTest` "INVENTORY-01"; CONSERVATION | CHECKs: SQLite triggers in the default suites; the named CHECKs are executed by MySQL, MariaDB and PostgreSQL in `tests/Concurrency`. A raw write can lower `reserved` (detected) |
+| 02 | stock=1, two concurrent reserve(1) cannot both succeed | **ENFORCED — proven on MySQL, MariaDB and PostgreSQL at their default isolation levels (`DATABASE-SUPPORT.md` §6; originally MySQL 8.0.30)** | single atomic conditional UPDATE, Inventory row locked first | CHECK backstop (demonstrated by probe) | SQL-shape/statement pins | "C" (SQLite algorithm tests); `tests/Concurrency` stock=1 scenarios (2 independent connections, verified lock wait; 4-way barrier ×10) | non-default isolation levels not executed (§11) |
 | 03 | ≤ 1 live reservation per OrderItem | **ENFORCED** | unique-claim INSERT + idempotent replay | `unique(order_item_id)` | — | "D", `InventorySchemaTest` | — |
-| 04 | Reservation creation atomic and idempotent | **ENFORCED** | one transaction; replay returns existing; lost-race rollback + one retry | unique index | — | "D" ×3, "composes … atomically" | retry inside a caller-owned REPEATABLE READ transaction may fail closed instead of converging (the top-level retry converges — proven on MySQL) |
+| 04 | Reservation creation atomic and idempotent | **ENFORCED** | one transaction; replay returns existing; lost-race rollback + bounded retry | unique index | — | "D" ×3, "composes … atomically" | retry inside a caller-owned REPEATABLE READ transaction may fail closed instead of converging (the top-level retry converges — proven on MySQL, MariaDB and PostgreSQL) |
 | 05 | Multi-line reservation all-or-nothing | **ENFORCED** | one transaction; any failure throws | — | transaction pin | "E" ×3, "S", ordering test | — |
 | 06 | Duplicate release ≤ 1 stock effect | **ENFORCED** | CAS `status='reserved'`; counters only for the winner | — | CAS pin | "F" ×3 | no DB terminal-state protection against raw SQL |
 | 07 | Duplicate commit ≤ 1 stock effect | **ENFORCED** | same | — | same | "G" ×2 | same |
 | 08 | Committed cannot be released | **ENFORCED** | CAS + illegal-transition refusal | evidence CHECK | enum-target pin | "H", state-machine test | raw SQL can flip status |
 | 09 | Released cannot be committed silently | **ENFORCED** | same (throws) | same | same | "I", late-payment test | same |
-| 10 | Concurrent commit/release: exactly one terminal winner | **ENFORCED — proven on MySQL 8.0.30/InnoDB; not run elsewhere** | CAS + Inventory pre-lock + locking re-read | — | `lockForUpdate` pins | "J" ×3 (SQLite stale-model); `tests/Concurrency` commit-vs-release both directions + barrier ×10 | other engines not executed |
+| 10 | Concurrent commit/release: exactly one terminal winner | **ENFORCED — proven on MySQL, MariaDB and PostgreSQL at their default isolation levels (`DATABASE-SUPPORT.md` §6; originally MySQL 8.0.30)** | CAS + Inventory pre-lock + locking re-read | — | `lockForUpdate` pins | "J" ×3 (SQLite stale-model); `tests/Concurrency` commit-vs-release both directions + barrier ×10 | non-default isolation levels not executed (§11) |
 | 11 | Expiry eligibility alone does not invent stock | **N/A** | no expiry implemented | — | `expires_at` banned | — | §12 |
 | 12 | Concurrent expiry workers cannot double-release | **N/A** | no worker | — | — | — | §12 |
 | 13 | PaymentAttempt failure does not release | **ENFORCED** | nothing calls release | — | empty caller allowlist | `InventoryPaymentBoundaryTest` M/N; probe 12 | structural, not a semantic proof about future callers |
@@ -365,7 +379,7 @@ Fail-closed at operation time: `reserve` refuses a mismatching existing reservat
 |---|---|---|
 | 1 | reserve one unit successfully | prevented-oversell; counters `+q` |
 | 2 | reserve more than available | rolled back (`InsufficientStock`) |
-| 3 | stock=1, two concurrent buyers | prevented (atomic predicate) — real-engine race **not run** |
+| 3 | stock=1, two concurrent buyers | prevented (atomic predicate) — real-engine race proven (§11; `DATABASE-SUPPORT.md` §6) |
 | 4 | duplicate reserve request | idempotent no-op |
 | 5 | request commits but response lost | safe retry → idempotent replay |
 | 6 | multi-line, last Product lacks stock | rolled back |
@@ -409,7 +423,7 @@ Each defect was injected one at a time, the permanent tests run, and the origina
 | drop the idempotent-reserve existing-check | "D" repeated reserve, terminal re-reserve, quantity-tampering |
 | remove the counter predicate on commit/release | "counter drift" |
 | commit forgets to consume `on_hand` | 10 tests incl. CONSERVATION, "G" ×2, checker |
-| replace `lockForUpdate()` on the loser's re-read | **only the architecture pin** — SQLite cannot observe it |
+| replace `lockForUpdate()` on the loser's re-read | **only the architecture pin** in the default (SQLite) suites — SQLite cannot observe it; on real MySQL the duplicate-commit scenario caught it behaviorally (§11 mutation probes) |
 | drop `unique(order_item_id)` | "D" lost-race, "D" classifier, `InventorySchemaTest` |
 | release inventory on PaymentAttempt failure (injected into `PaymentEventProcessor`) | "M", "N" **and** the empty-caller architecture test |
 | direct stock write from a controller | raw-table and hidden-stock architecture tests |
@@ -419,7 +433,7 @@ Expiry-CAS probe: N/A (no expiry).
 ## 21. Known limitations
 
 1. **Inert in production**: no way to create stock, no caller (§10, §13).
-2. Real-engine proof exists **only for MySQL 8.0.30/InnoDB/REPEATABLE READ** (§11). PostgreSQL, MariaDB, other MySQL versions and isolation levels are argued, not executed. No soak/scale test.
+2. Real-engine proof exists for MySQL, MariaDB and PostgreSQL at their default isolation levels (`docs/architecture/DATABASE-SUPPORT.md` §6; this branch's original proof was MySQL 8.0.30, §11). Non-default isolation levels, engine versions not listed there, and replicated/clustered setups are argued, not executed. No soak/scale test.
 3. **No expiry / release trigger**: reservations live until explicitly committed or released, so a future checkout could hoard stock — bounded only once the §12 decision exists.
 4. **No payment commit integration**; a paid Order can have a `reserved` reservation indefinitely (detectable: paid line-backed Order + `reserved` row).
 5. **Late payment after release** is unresolved (§12).
@@ -429,7 +443,7 @@ Expiry-CAS probe: N/A (no expiry).
 9. The unique-race retry may fail closed inside a caller-owned REPEATABLE READ transaction.
 10. Static scans have the blind spots in §17.
 11. **Operational completeness is deliberately absent** (§0): correctness of the reservation domain is not the same as a working inventory system. Nothing creates stock, nothing calls the service, nothing expires or cancels a hold, nothing commits on payment.
-12. **Pre-existing, out of scope, tracked centrally:** migration `2026_09_17_090000_create_payment_reconciliation_findings_table` still exceeds MySQL/MariaDB's 64-character identifier limit (and, separately, PostgreSQL's stricter 63-character limit) — see `docs/architecture/DATABASE-SUPPORT.md` §3 for why it remains unfixed (the historical migration is immutable, and a proper fix needs a live-database-generated schema baseline this project has not yet had access to) and `tests/Architecture/DatabaseMigrationPortabilityTest.php` for the mechanical, exact-set regression guard around it. `config/database.php` still references `PDO::MYSQL_ATTR_SSL_CA`, deprecated on PHP 8.5 — left untouched there as a separate, non-blocking PHP/MySQL compatibility warning (a correct fix needs PHP-version feature-detection, since this repository supports PHP 8.2+ and the replacement constant needs 8.4+).
+12. **Pre-existing, out of scope, tracked centrally:** migration `2026_09_17_090000_create_payment_reconciliation_findings_table` still contains an identifier over MySQL/MariaDB's 64-character limit (and, separately, PostgreSQL's stricter 63-character limit), and always will — the historical migration is immutable. Fresh install is resolved per engine without editing it (schema baselines for MySQL/MariaDB, a direct replay on PostgreSQL) — see `docs/architecture/DATABASE-SUPPORT.md` §3/§11 — and `tests/Architecture/DatabaseMigrationPortabilityTest.php` keeps the exact known set as a regression guard against any new over-limit identifier. `config/database.php` still references `PDO::MYSQL_ATTR_SSL_CA`, deprecated on PHP 8.5 — left untouched there as a separate, non-blocking PHP/MySQL compatibility warning (a correct fix needs PHP-version feature-detection, since this repository supports PHP 8.2+ and the replacement constant needs 8.4+).
 
 ## 22. Future decisions
 
@@ -437,7 +451,6 @@ Expiry-CAS probe: N/A (no expiry).
 * the checkout contract (who reserves, when, with which composition);
 * how stock is created/adjusted, with a ledger, and whether it may drop below reserved;
 * cancellation must use `release()`, never a new stock path;
-* a real two-connection concurrency test on the production engine.
 
 ## 23. Non-goals confirmed absent
 
