@@ -8,6 +8,7 @@ use App\Domain\Wallet\Exceptions\InvalidTransactionAmountException;
 use App\Domain\Wallet\Exceptions\TransactionAlreadyReversedException;
 use App\Domain\Wallet\Exceptions\TransactionNotCompletedException;
 use App\Domain\Wallet\Exceptions\TransactionNotPendingException;
+use App\Domain\Wallet\Exceptions\WalletIdempotencyRaceUnresolvedException;
 use App\Domain\Wallet\Exceptions\WalletMismatchException;
 use App\Domain\Wallet\WalletTransactionReference;
 use App\Enums\TransactionSource;
@@ -26,6 +27,48 @@ class WalletTransactionService
      * Idempotent transactions are immutable.
      * Later duplicate events must not overwrite the original payload.
      * The first persisted event is the source of truth.
+     *
+     * PostgreSQL-safe idempotent-insert algorithm, savepoint-based. An
+     * earlier version of this method used `insertOrIgnore()` (matching
+     * App\Domain\Payouts\Services\PayoutService::request()'s own pattern) —
+     * reconsidered after an adversarial audit found it unsafe specifically
+     * for MySQL/MariaDB: under `sql_mode=STRICT_ALL_TABLES` (this
+     * connection's own `'strict' => true`), the `IGNORE` modifier does not
+     * merely suppress the unique-key conflict it was chosen for — MySQL's
+     * own reference manual ("Enforced Constraints on Invalid Data") states
+     * that `IGNORE` *cancels strict-mode error escalation for that one
+     * statement*, converting data-quality errors (a value too long for its
+     * column, a value outside a numeric column's range, ...) into WARNINGS
+     * and silently inserting a *coerced/truncated* row while still
+     * reporting success — a real risk `create()` never had, and one a plain
+     * `insertOrIgnore()` on `amount`/`balance_after`/`external_reference`
+     * (no application-level upper-bound validation exists on any of them)
+     * could not be ruled out for. See docs/architecture/DATABASE-SUPPORT.md
+     * for the full audit.
+     *
+     * Fixed instead with a **real, targeted savepoint**: `create()` is
+     * wrapped in its own, inner `DB::transaction()`. Verified against the
+     * installed Laravel version's own
+     * `Illuminate\Database\Concerns\ManagesTransactions`: `createTransaction()`
+     * issues a real `SAVEPOINT` whenever `$this->transactions >= 1` (i.e.
+     * whenever already inside a transaction — true for every one of this
+     * method's current callers: `reverse()`, `PayoutService::request()`,
+     * `PaymentService::finalizeAttempt()`, all three traced to already call
+     * `record()` from inside their own transaction), and on any exception
+     * `handleTransactionException()` issues a real `ROLLBACK TO SAVEPOINT`
+     * — never a no-op — before re-throwing. A duplicate-key violation is
+     * never classified as `causedByConcurrencyError()`'s deadlock
+     * special-case (that only matches deadlock/lock-wait/serialization
+     * signatures), so it always takes this exact rollback-then-rethrow
+     * path. By the time the `catch` below runs, Laravel's own rollback has
+     * already executed — the surrounding transaction, at whatever level
+     * it's nested, is never left aborted on PostgreSQL — and no
+     * `IGNORE`/coercion semantics are ever invoked on any engine: every
+     * value is validated exactly as strictly as a plain `create()` always
+     * was, on every engine including MySQL/MariaDB. This also keeps every
+     * Eloquent behavior a raw query-builder insert would have bypassed
+     * (UUID generation via `HasUuids`, the `metadata` array→JSON cast,
+     * timestamps, any future model event/observer).
      *
      * @param  string  $categorySlug  e.g. 'sale', 'withdrawal', 'commission'
      * @param  string  $amount  always positive; direction comes from the category. Positive decimal amount (e.g. "100.00")
@@ -58,6 +101,10 @@ class WalletTransactionService
             $options
         ) {
             if ($reference !== null) {
+                // Obvious pre-existing replay (e.g. a webhook redelivery for
+                // an already fully-processed event): resolved without ever
+                // taking the wallet lock. Unchanged — this was always a
+                // plain SELECT, never at risk of a poisoned transaction.
                 $existing = $this->findByReference($reference);
 
                 if ($existing) {
@@ -81,7 +128,10 @@ class WalletTransactionService
             $referenceable = $options['referenceable'] ?? null;
 
             try {
-                $transaction = StoreWalletTransaction::create([
+                // Its own savepoint (see the class docblock above) — a real
+                // ROLLBACK TO SAVEPOINT runs, undoing only this insert
+                // attempt, before the catch below ever executes.
+                $transaction = DB::transaction(fn () => StoreWalletTransaction::create([
                     'store_wallet_id' => $lockedWallet->id,
                     'transaction_category_id' => $category->id,
                     'transaction_status_id' => $status->id,
@@ -100,15 +150,23 @@ class WalletTransactionService
                     'metadata' => $options['metadata'] ?? null,
                     'source' => $options['source'] ?? TransactionSource::System,
                     'created_by' => $options['created_by'] ?? null,
-                ]);
+                ]));
             } catch (QueryException $e) {
-                if ($reference && $e->getCode() === '23000') {
-                    $existing = $this->findByReference($reference) ?? throw $e;
-
-                    return $this->resolveExisting($existing, $status);
+                if (! $reference || ! $this->isReferenceUniqueViolation($e)) {
+                    throw $e;
                 }
 
-                throw $e;
+                // Lost the unique(external_provider, external_reference)
+                // race — the savepoint above already rolled this attempt
+                // back (see the class docblock), so this SELECT runs on a
+                // healthy transaction on every engine, including
+                // PostgreSQL. These rows are never deleted (class
+                // docblock), so the row this insert just conflicted
+                // against cannot have vanished by the time we read it back.
+                $existing = $this->findByReference($reference)
+                    ?? throw WalletIdempotencyRaceUnresolvedException::forReference($reference->provider, $reference->reference);
+
+                return $this->resolveExisting($existing, $status);
             }
 
             if ($isCompleted) {
@@ -120,6 +178,15 @@ class WalletTransactionService
 
             return $transaction->fresh();
         });
+    }
+
+    /** Portable across drivers — mirrors InventoryReservationService::isReservationIdentityViolation()'s precision. */
+    private function isReferenceUniqueViolation(QueryException $e): bool
+    {
+        $sqlState = (string) ($e->errorInfo[0] ?? $e->getCode());
+
+        return in_array($sqlState, ['23000', '23505'], true)
+            && str_contains($e->getMessage(), 'external_reference');
     }
 
     /**

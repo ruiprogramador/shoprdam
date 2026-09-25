@@ -1,7 +1,5 @@
 <?php
 
-use Illuminate\Support\Facades\DB;
-
 /**
  * Verifies the actual, migrated FK delete policy for
  * payment_reconciliation_findings against real `PRAGMA foreign_key_list`
@@ -14,9 +12,7 @@ use Illuminate\Support\Facades\DB;
  */
 function reconciliationFindingForeignKeyDeleteRules(): array
 {
-    return collect(DB::select("PRAGMA foreign_key_list('payment_reconciliation_findings')"))
-        ->mapWithKeys(fn ($row) => [$row->from => $row->on_delete])
-        ->all();
+    return dbForeignKeyDeleteRules('payment_reconciliation_findings');
 }
 
 it('enforces RESTRICT at the database level for payment_attempt_id', function () {
@@ -41,12 +37,5 @@ it('never uses CASCADE for any foreign key on payment_reconciliation_findings', 
 });
 
 it('enforces uniqueness on active_identity at the database level', function () {
-    $indexes = collect(DB::select("PRAGMA index_list('payment_reconciliation_findings')"))
-        ->filter(fn ($index) => (bool) $index->unique);
-
-    $uniqueColumns = $indexes->map(function ($index) {
-        return collect(DB::select("PRAGMA index_info('{$index->name}')"))->pluck('name')->all();
-    });
-
-    expect($uniqueColumns->contains(['active_identity']))->toBeTrue();
+    expect(dbUniqueColumnSets('payment_reconciliation_findings'))->toContain(['active_identity']);
 });

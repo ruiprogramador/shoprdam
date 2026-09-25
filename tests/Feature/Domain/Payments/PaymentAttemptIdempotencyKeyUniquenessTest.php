@@ -9,6 +9,7 @@ use Illuminate\Database\QueryException;
 use Illuminate\Database\Schema\Blueprint;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Schema;
+use Illuminate\Support\Str;
 
 /**
  * Proves the database-level UNIQUE(provider, idempotency_key) constraint
@@ -45,8 +46,12 @@ function attemptAttributes(int $paymentId, string $provider, string $idempotency
 it('rejects a second payment_attempts row with the same (provider, idempotency_key) pair', function () {
     PaymentAttempt::create(attemptAttributes(paymentForNewOrder()->id, 'stripe', 'shared-key'));
 
-    expect(fn () => PaymentAttempt::create(attemptAttributes(paymentForNewOrder()->id, 'stripe', 'shared-key')))
-        ->toThrow(QueryException::class);
+    // The second Payment is created OUTSIDE the savepoint below — it is
+    // not the operation this test expects the database to refuse, and
+    // must survive the refused PaymentAttempt insert's rollback.
+    $secondPaymentId = paymentForNewOrder()->id;
+
+    expectDatabaseRefusal(fn () => PaymentAttempt::create(attemptAttributes($secondPaymentId, 'stripe', 'shared-key')));
 
     expect(PaymentAttempt::where('provider', 'stripe')->where('idempotency_key', 'shared-key')->count())
         ->toBe(1);
@@ -131,9 +136,9 @@ it('two attempts for the same provider can both reach the pre-deterministic-key 
     $paymentA = paymentForNewOrder();
     $paymentB = paymentForNewOrder();
 
-    $attemptA = PaymentAttempt::create(attemptAttributes($paymentA->id, 'stripe', 'pending-'.\Illuminate\Support\Str::uuid()));
+    $attemptA = PaymentAttempt::create(attemptAttributes($paymentA->id, 'stripe', 'pending-'.Str::uuid()));
 
-    expect(fn () => PaymentAttempt::create(attemptAttributes($paymentB->id, 'stripe', 'pending-'.\Illuminate\Support\Str::uuid())))
+    expect(fn () => PaymentAttempt::create(attemptAttributes($paymentB->id, 'stripe', 'pending-'.Str::uuid())))
         ->not->toThrow(QueryException::class);
 
     expect($attemptA->idempotency_key)->not->toBe('');

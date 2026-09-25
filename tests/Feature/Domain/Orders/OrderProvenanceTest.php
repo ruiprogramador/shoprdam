@@ -15,8 +15,9 @@ use App\Models\Order;
 use App\Models\OrderStatus;
 use App\Models\Store;
 use App\Models\StoreWalletTransaction;
-use Illuminate\Database\QueryException;
+use Illuminate\Database\Events\QueryExecuted;
 use Illuminate\Support\Facades\DB;
+use Illuminate\Support\Facades\Event;
 use Illuminate\Support\Facades\Schema;
 use Nnjeim\World\Models\Currency;
 use Tests\Fakes\FakeTestPaymentProvider;
@@ -85,9 +86,24 @@ it('never leaves a line-backed-marked Order behind when creation fails (provenan
     $store = Store::factory()->create();
     $product = app(ProductService::class)->create($store, 'Widget', '10.00', opvEur());
 
-    DB::unprepared("CREATE TRIGGER fail_any_item BEFORE INSERT ON order_items BEGIN SELECT RAISE(ABORT, 'simulated'); END");
+    // Engine-agnostic failure injection at the order_items INSERT (a SQLite
+    // `RAISE(ABORT, ...)` trigger has no portable equivalent across
+    // MySQL/MariaDB/PostgreSQL): intercept the query itself and throw right
+    // as it's about to run, inside the same still-open transaction —
+    // exactly what a real mid-transaction failure looks like from the
+    // service's point of view, regardless of engine.
+    DB::listen(function (QueryExecuted $q) {
+        if (preg_match('/^insert\s+into\s+[`"]?order_items[`"]?/i', $q->sql)) {
+            throw new RuntimeException('simulated order_items insert failure');
+        }
+    });
 
-    expect(fn () => app(OrderCreationService::class)->create($store, [['product' => $product, 'quantity' => 1]]))->toThrow(QueryException::class);
+    try {
+        expect(fn () => app(OrderCreationService::class)->create($store, [['product' => $product, 'quantity' => 1]]))
+            ->toThrow(RuntimeException::class, 'simulated order_items insert failure');
+    } finally {
+        Event::forget(QueryExecuted::class);
+    }
 
     expect(Order::count())->toBe(0)
         ->and(Order::where('is_line_backed', true)->count())->toBe(0);
@@ -143,8 +159,12 @@ it('migration backfill: an Order that exists BEFORE the migration is legacy afte
 
     $row = DB::table('orders')->where('id', $id)->first();
 
+    // SQLite stores/returns '77.7' for a raw-inserted '77.70' (dynamic typing);
+    // a real decimal(18,2) column (MySQL/MariaDB/PostgreSQL) returns '77.70'
+    // exactly as defined — compare numerically, not by exact string, so this
+    // assertion holds on every engine.
     expect((int) $row->is_line_backed)->toBe(0)
-        ->and((string) $row->amount)->toBe('77.7')
+        ->and(bccomp((string) $row->amount, '77.70', 2))->toBe(0)
         ->and($row->created_at)->toBe('2026-01-01 10:00:00')
         ->and($row->updated_at)->toBe('2026-01-02 10:00:00')
         ->and(DB::table('order_items')->count())->toBe(0);

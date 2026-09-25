@@ -6,7 +6,13 @@ use App\Domain\Wallet\WalletTransactionReference;
 use App\Enums\TransactionSource;
 use App\Models\Admin;
 use App\Models\StoreWalletTransaction;
+use App\Models\TransactionCategory;
+use App\Models\TransactionStatus;
+use Illuminate\Database\Events\QueryExecuted;
 use Illuminate\Database\QueryException;
+use Illuminate\Support\Facades\DB;
+use Illuminate\Support\Facades\Event;
+use Illuminate\Support\Str;
 
 beforeEach(function () {
     $this->service = walletService();
@@ -547,6 +553,70 @@ it('returns an existing transaction when external reference already exists befor
         ->toBe($existing->id)
         ->and($this->wallet->transactions()->count())
         ->toBe(1);
+});
+
+/**
+ * `harden/database-portability` — the race the report's PostgreSQL
+ * transaction-abort audit found unsafe in the OLD implementation (catch a
+ * unique-constraint QueryException, then keep querying inside the same,
+ * now-Postgres-aborted transaction). Neither the "before recording" test
+ * above (nothing exists until record() is called) nor the raw-factory test
+ * (never calls record() at all) exercises the actual in-transaction race:
+ * findByReference() finds nothing (the row doesn't exist yet when checked),
+ * a competitor then commits the exact same reference, and THIS call's own
+ * insertOrIgnore() is the one that discovers the conflict.
+ */
+it('a competitor that commits the same external reference between the early check and this call\'s own insert converges on the winner with no double balance effect', function () {
+    $reference = new WalletTransactionReference('stripe', 'race_inside_tx');
+    $category = TransactionCategory::bySlugOrFail('sale');
+    $status = TransactionStatus::bySlugOrFail('completed');
+    $competitorId = null;
+
+    $armed = true;
+
+    DB::listen(function (QueryExecuted $q) use (&$armed, &$competitorId, $reference, $category, $status) {
+        // Fires right after record()'s wallet lock SELECT — the exact point
+        // where a read-then-write implementation would have already decided
+        // its balance, and strictly BEFORE this call's own savepoint-protected
+        // create() runs — a competitor commits the exact same reference
+        // first. Matches the bare table name, not a quoted "from ..." clause:
+        // SQLite/Postgres quote identifiers with double quotes, MySQL/MariaDB
+        // with backticks — this fires identically on every engine.
+        if ($armed && str_starts_with($q->sql, 'select') && str_contains($q->sql, 'store_wallets')) {
+            $armed = false;
+
+            $now = now();
+            $competitorId = DB::table('store_wallet_transactions')->insertGetId([
+                'uuid' => (string) Str::uuid7(),
+                'store_wallet_id' => test()->wallet->id,
+                'transaction_category_id' => $category->id,
+                'transaction_status_id' => $status->id,
+                'amount' => '30.00',
+                'balance_after' => '30.00',
+                'external_provider' => $reference->provider,
+                'external_reference' => $reference->reference,
+                'source' => 'system',
+                'created_at' => $now,
+                'updated_at' => $now,
+            ]);
+            DB::table('store_wallets')->where('id', test()->wallet->id)->update([
+                'balance' => '30.00',
+                'last_transaction_at' => $now,
+            ]);
+        }
+    });
+
+    try {
+        $result = $this->service->record($this->wallet, 'sale', '999.00', $reference);
+    } finally {
+        Event::forget(QueryExecuted::class);
+    }
+
+    expect($armed)->toBeFalse()
+        ->and($result->id)->toBe($competitorId)
+        ->and($result->amount)->toBe('30.00')
+        ->and($this->wallet->fresh()->balance)->toBe('30.00')
+        ->and($this->wallet->transactions()->count())->toBe(1);
 });
 
 it('records multiple transactions sequentially keeping balances correct', function () {

@@ -8,16 +8,14 @@ use Nnjeim\World\Models\Currency;
 
 /**
  * Mirrors tests/Feature/Domain/Payouts/PayoutSchemaDeletePolicyTest — checks
- * the *actual* constraint SQLite enforces, read straight from the migrated
- * schema via `PRAGMA foreign_key_list`, rather than trusting the migration's
- * source text. A Feature test (not Architecture) because it needs a real
- * migrated database.
+ * the *actual* constraint the engine enforces, read straight from the
+ * migrated schema (see dbForeignKeyDeleteRules() in tests/Helpers.php),
+ * rather than trusting the migration's source text. A Feature test (not
+ * Architecture) because it needs a real migrated database.
  */
 function catalogForeignKeyDeleteRules(string $table): array
 {
-    return collect(DB::select("PRAGMA foreign_key_list('{$table}')"))
-        ->mapWithKeys(fn ($row) => [$row->from => $row->on_delete])
-        ->all();
+    return dbForeignKeyDeleteRules($table);
 }
 
 it('enforces RESTRICT at the database level for every foreign key on products', function () {

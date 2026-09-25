@@ -58,9 +58,20 @@ return [
             'prefix_indexes' => true,
             'strict' => true,
             'engine' => null,
+            // DB_MYSQL_SKIP_SSL_VERIFY: opt-in only, unset in every real
+            // environment. Added for `harden/database-portability`'s local
+            // disposable-Docker real-engine proof: MySQL 8's client tools
+            // reject its own auto-generated self-signed cert by default
+            // ("TLS/SSL error: self-signed certificate in certificate
+            // chain"), which blocks `schema:dump`/`migrate`'s schema-load
+            // step specifically (subprocess calls to the `mysql`/`mysqldump`
+            // binaries) — normal PDO-based queries are unaffected either
+            // way. Never weakens a domain invariant; production never sets
+            // this var, so `array_filter`'s null-removal still applies there.
             'options' => extension_loaded('pdo_mysql') ? array_filter([
                 PDO::MYSQL_ATTR_SSL_CA => env('MYSQL_ATTR_SSL_CA'),
-            ]) : [],
+                PDO::MYSQL_ATTR_SSL_VERIFY_SERVER_CERT => env('DB_MYSQL_SKIP_SSL_VERIFY') ? false : null,
+            ], fn ($value) => $value !== null) : [],
         ],
 
         'mariadb' => [

@@ -9,8 +9,10 @@ use App\Models\Order;
 use App\Models\OrderItem;
 use App\Models\Store;
 use App\Models\StoreWalletTransaction;
+use Illuminate\Database\Events\QueryExecuted;
 use Illuminate\Database\QueryException;
 use Illuminate\Support\Facades\DB;
+use Illuminate\Support\Facades\Event;
 use Nnjeim\World\Models\Currency;
 
 /**
@@ -305,7 +307,37 @@ it('rejects a stored Product price that is malformed, negative or over-precise i
     $store = Store::factory()->create();
     $product = ocProduct($store);
 
-    DB::table('products')->where('id', $product->id)->update(['price_amount' => $stored]);
+    try {
+        DB::table('products')->where('id', $product->id)->update(['price_amount' => $stored]);
+    } catch (QueryException $e) {
+        // A strictly-typed decimal(18,2) column (MySQL/MariaDB under strict
+        // mode) can refuse a non-numeric value ('abc', '') at the write
+        // itself — stronger protection than SQLite's dynamic typing, which
+        // stores it as-is and relies on the application layer below to
+        // catch it. Either way the bad value never becomes readable.
+        expect($e)->toBeInstanceOf(QueryException::class);
+
+        return;
+    }
+
+    // A real decimal(18,2) column can also silently ROUND an over-precise
+    // value instead of rejecting it (confirmed on real MySQL 8: '10.005' is
+    // stored as '10.01', even under strict mode — precision rounding is
+    // allowed there, unlike a type/range violation). When that happens the
+    // malformed value this test means to simulate was never actually
+    // persisted, so the scenario isn't reproducible on this engine — same
+    // conclusion as the write-rejected case above, just discovered after
+    // the write instead of during it.
+    $persisted = (string) DB::table('products')->where('id', $product->id)->value('price_amount');
+    $changed = is_numeric($persisted) && is_numeric($stored)
+        ? bccomp($persisted, $stored, 6) !== 0 // numeric engines may format '-5.00' back as '-5': compare by value
+        : $persisted !== $stored;
+
+    if ($changed) {
+        expect($changed)->toBeTrue();
+
+        return;
+    }
 
     expect(fn () => ocCreate($store, [[$product, 1]]))
         ->toThrow(InvalidOrderCreationException::class, 'cannot be snapshotted');
@@ -375,9 +407,21 @@ it('rolls the Order back when the line insert fails after the Order insert alrea
     $store = Store::factory()->create();
     $a = ocProduct($store);
 
-    DB::unprepared("CREATE TRIGGER fail_any_item BEFORE INSERT ON order_items BEGIN SELECT RAISE(ABORT, 'simulated line insert failure'); END");
+    // Engine-agnostic failure injection (a SQLite RAISE(ABORT,...) trigger
+    // has no portable equivalent across MySQL/MariaDB/PostgreSQL): intercept
+    // the order_items INSERT itself and throw as it's about to run, inside
+    // the same still-open transaction.
+    DB::listen(function (QueryExecuted $q) {
+        if (preg_match('/^insert\s+into\s+[`"]?order_items[`"]?/i', $q->sql)) {
+            throw new RuntimeException('simulated line insert failure');
+        }
+    });
 
-    expect(fn () => ocCreate($store, [[$a, 1]]))->toThrow(QueryException::class, 'simulated line insert failure');
+    try {
+        expect(fn () => ocCreate($store, [[$a, 1]]))->toThrow(RuntimeException::class, 'simulated line insert failure');
+    } finally {
+        Event::forget(QueryExecuted::class);
+    }
 
     ocNothingPersisted();
 });
@@ -387,10 +431,24 @@ it('leaves no partial line set when a later line in the same request fails to in
     $a = ocProduct($store, '1.00', 'A');
     $b = ocProduct($store, '1.00', 'B');
 
-    // Lines are written in ascending product-id order: A (qty 1) inserts, then B (qty 7) is aborted.
-    DB::unprepared("CREATE TRIGGER fail_seventh BEFORE INSERT ON order_items WHEN NEW.quantity = 7 BEGIN SELECT RAISE(ABORT, 'simulated second-line failure'); END");
+    // The production code writes every line in ONE bulk INSERT (see
+    // OrderCreationService::create()), not one statement per line — so
+    // "the second line fails" and "the whole insert fails" are the same
+    // observable event here; this test's distinct value over its sibling
+    // above is that it proves a MULTI-line request still leaves nothing
+    // behind, not a single-line one. Same engine-agnostic failure injection
+    // (see that sibling for why not a SQLite trigger).
+    DB::listen(function (QueryExecuted $q) {
+        if (preg_match('/^insert\s+into\s+[`"]?order_items[`"]?/i', $q->sql)) {
+            throw new RuntimeException('simulated second-line failure');
+        }
+    });
 
-    expect(fn () => ocCreate($store, [[$a, 1], [$b, 7]]))->toThrow(QueryException::class, 'simulated second-line failure');
+    try {
+        expect(fn () => ocCreate($store, [[$a, 1], [$b, 7]]))->toThrow(RuntimeException::class, 'simulated second-line failure');
+    } finally {
+        Event::forget(QueryExecuted::class);
+    }
 
     ocNothingPersisted();
 });
@@ -423,7 +481,7 @@ it('reads every requested Product in exactly one products query, so a snapshot c
 
     $productQueries = [];
     DB::listen(function ($query) use (&$productQueries) {
-        if (preg_match('/\bfrom\s+"products"/i', $query->sql)) {
+        if (preg_match('/\bfrom\s+[`"]?products[`"]?/i', $query->sql)) {
             $productQueries[] = $query->sql;
         }
     });

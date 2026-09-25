@@ -247,7 +247,7 @@ it('emits OrderTransitioned only at the OUTERMOST commit, after the Order transi
     $observed = ['order_update_levels' => []];
 
     DB::listen(function ($query) use (&$observed) {
-        if (str_contains($query->sql, 'update "orders"')) {
+        if (preg_match('/^update\s+[`"]?orders[`"]?/i', $query->sql)) {
             $observed['order_update_levels'][] = DB::transactionLevel();
         }
     });

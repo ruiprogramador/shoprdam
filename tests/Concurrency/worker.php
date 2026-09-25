@@ -1,10 +1,11 @@
 <?php
 
 /**
- * Child process for tests/Concurrency/InventoryMysqlConcurrencyTest.php — NOT a
- * test, and never loaded by Pest. One invocation = one independent PHP process
- * with its own MySQL connection, performing exactly one canonical inventory
- * operation and writing its outcome to a file the parent reads.
+ * Child process for InventoryMysqlConcurrencyTest.php and
+ * InventoryPostgresConcurrencyTest.php — NOT a test, and never loaded by
+ * Pest directly. One invocation = one independent PHP process with its own
+ * database connection, performing exactly one canonical inventory operation
+ * and writing its outcome to a file the parent reads.
  *
  * Protocol (all files live in the per-scenario directory `dir`):
  *
@@ -31,6 +32,23 @@ use App\Models\Order;
 use Illuminate\Contracts\Console\Kernel;
 use Illuminate\Support\Facades\DB;
 
+/**
+ * `file_put_contents($path, $data)` is open+write+close, not one atomic
+ * operation: the parent's `file_exists($path)` poll can observe the fresh
+ * (empty) directory entry before the write lands, then read 0 bytes. On this
+ * project's real-MySQL-concurrency Docker host that raced often enough to
+ * intermittently corrupt `.ready`/`.result` reads (confirmed reproducible
+ * with a bare, MySQL-free file_put_contents/file_exists probe — not a
+ * database-layer issue). `rename()` on the same filesystem is atomic, so
+ * write to a sibling temp name first and rename into place.
+ */
+function atomicWrite(string $path, string $contents): void
+{
+    $tmp = $path.'.tmp-'.getmypid();
+    file_put_contents($tmp, $contents);
+    rename($tmp, $path);
+}
+
 $job = json_decode($argv[1] ?? '', true, flags: JSON_THROW_ON_ERROR);
 
 $root = dirname(__DIR__, 2);
@@ -43,8 +61,8 @@ $app->make(Kernel::class)->bootstrap();
 $connection = config('database.default');
 $settings = config("database.connections.{$connection}");
 
-if ($connection !== 'mysql' || ! in_array($settings['host'], ['127.0.0.1', 'localhost'], true) || ! str_ends_with((string) $settings['database'], '_concurrency_test')) {
-    fwrite(STDERR, "worker refuses: not a disposable local *_concurrency_test MySQL database.\n");
+if (! in_array($connection, ['mysql', 'mariadb', 'pgsql'], true) || ! in_array($settings['host'], ['127.0.0.1', 'localhost'], true) || ! str_ends_with((string) $settings['database'], '_concurrency_test')) {
+    fwrite(STDERR, "worker refuses: not a disposable local *_concurrency_test mysql/mariadb/pgsql database.\n");
     exit(2);
 }
 
@@ -72,8 +90,10 @@ $operation = fn () => match ($job['action']) {
     'release' => $service->release($order),
 };
 
-$connectionId = (int) DB::selectOne('select connection_id() as id')->id;
-file_put_contents("{$dir}/{$name}.ready", (string) $connectionId);
+$connectionId = (int) DB::selectOne(
+    $connection === 'pgsql' ? 'select pg_backend_pid() as id' : 'select connection_id() as id'
+)->id;
+atomicWrite("{$dir}/{$name}.ready", (string) $connectionId);
 
 $waitFor("{$dir}/{$name}.go");
 
@@ -103,4 +123,4 @@ try {
 
 $outcome += ['connection_id' => $connectionId, 'started_at' => $startedAt, 'finished_at' => microtime(true)];
 
-file_put_contents("{$dir}/{$name}.result", json_encode($outcome));
+atomicWrite("{$dir}/{$name}.result", json_encode($outcome));
