@@ -420,8 +420,15 @@ it('keeps the load-bearing statements of the reservation service in place (INVEN
         ->and($compact)->toContain('Inventory::query()->whereKey($inventoryId)->lockForUpdate()')
         ->and($compact)->toContain('Inventory::query()->whereKey($reservation->inventory_id)->lockForUpdate()')
         ->and($compact)->toContain('->whereKey($reservationId)->lockForUpdate()')
-        // one transaction per operation, deterministic lock order
-        ->and(substr_count($code, 'DB::transaction('))->toBeGreaterThanOrEqual(3)
+        // one transaction per operation, deterministic lock order — one
+        // `DB::transaction(` call site in reserve() and one in settle(),
+        // each now inside a small bounded retry loop (MariaDB's
+        // innodb_snapshot_isolation signal, see isMariadbSnapshotConflict())
+        // rather than reserve()'s previous two separate literal call sites
+        // (try + a single hardcoded retry) — every retry still opens a
+        // genuinely new transaction via this same call, never resuming a
+        // failed one
+        ->and(substr_count($code, 'DB::transaction('))->toBeGreaterThanOrEqual(2)
         ->and(substr_count($code, "->orderBy('inventory_id')"))->toBeGreaterThanOrEqual(2)
         // no read-modify-write of a stock number
         ->and($code)->not->toMatch('/->(on_hand_quantity|reserved_quantity)\s*[-+]?=/')

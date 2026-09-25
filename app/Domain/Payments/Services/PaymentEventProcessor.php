@@ -384,23 +384,52 @@ class PaymentEventProcessor
     private function storeUnmatchedEvent(ProviderEventOutcome $outcome): void
     {
         try {
-            PaymentProviderEvent::create([
+            // Its own savepoint when already inside a transaction (SAVEPOINT
+            // if already nested, a plain BEGIN/ROLLBACK otherwise — see
+            // Illuminate\Database\Concerns\ManagesTransactions::createTransaction()).
+            // Confirmed on real PostgreSQL 16: without this, a lost race
+            // here left the connection in SQLSTATE 25P02 for the recovery
+            // exists() check below, whenever this ran inside an outer
+            // transaction (e.g. under RefreshDatabase in tests). Mirrors
+            // WalletTransactionService::record()'s savepoint fix exactly.
+            DB::transaction(fn () => PaymentProviderEvent::create([
                 'provider' => $outcome->provider,
                 'provider_event_id' => $outcome->eventId,
                 'event_type' => $outcome->eventType,
                 'provider_reference' => $outcome->providerReference,
                 'payload' => $outcome->replayPayload,
                 'status' => ProviderEventStatus::Pending,
-            ]);
+            ]));
 
             Log::info('Queued a provider event with no matching local claim yet.', $this->eventLogContext($outcome));
         } catch (QueryException $e) {
+            // Only the unique(provider, provider_event_id) race is
+            // recovered here — any other constraint failure propagates
+            // unchanged. The savepoint above already rolled this attempt
+            // back before this catch runs, so the exists() check below
+            // always sees a healthy transaction, on every engine including
+            // PostgreSQL. Still verify the canonical row actually exists
+            // before treating this as a safe no-op — the classifier alone
+            // does not prove which row was actually hit.
+            if (! $this->isProviderEventUniqueViolation($e)) {
+                throw $e;
+            }
+
             if (! PaymentProviderEvent::where('provider', $outcome->provider)
                 ->where('provider_event_id', $outcome->eventId)
                 ->exists()) {
                 throw $e;
             }
         }
+    }
+
+    /** Portable across drivers — mirrors InventoryReservationService::isReservationIdentityViolation()'s precision. */
+    private function isProviderEventUniqueViolation(QueryException $e): bool
+    {
+        $sqlState = (string) ($e->errorInfo[0] ?? $e->getCode());
+
+        return in_array($sqlState, ['23000', '23505'], true)
+            && str_contains($e->getMessage(), 'provider_event_id');
     }
 
     /**

@@ -104,11 +104,13 @@ class PayoutEventProcessor
             }
 
             // unique(provider, external_transfer_reference) rejected the
-            // UPDATE — this transaction rolled back entirely (nothing else
-            // happens after it in this closure, so there is no "poisoned
-            // transaction" concern on PostgreSQL here, unlike
-            // PayoutService::request()). A real bank reference must never
-            // be accepted as evidence for two different attempts.
+            // UPDATE — this transaction rolled back entirely via Laravel's
+            // own transaction/savepoint machinery before this catch ever
+            // runs (nothing else happens after the failing statement in
+            // this closure, so there is no "poisoned transaction" concern
+            // on PostgreSQL here, unlike WalletTransactionService::record()
+            // before its own fix). A real bank reference must never be
+            // accepted as evidence for two different attempts.
             throw new ExternalTransferReferenceAlreadyUsedException(
                 "external_transfer_reference '{$outcome->externalTransferReference}' for provider ".
                 "'{$outcome->provider}' already identifies a different PayoutAttempt.",
@@ -206,12 +208,26 @@ class PayoutEventProcessor
     }
 
     /**
-     * Portable across drivers: MySQL/SQLite report a unique-constraint
-     * violation as SQLSTATE 23000, PostgreSQL as 23505.
+     * Portable across drivers: MySQL/MariaDB/SQLite report a unique-constraint
+     * violation as SQLSTATE 23000, PostgreSQL as 23505 — checked via
+     * `errorInfo[0]` first (the raw SQLSTATE PDO reports), falling back to
+     * `getCode()` for drivers that only populate that. `payout_attempts` has
+     * three unique constraints (`(provider, provider_reference)`,
+     * `(provider, external_transfer_reference)`, `(provider, idempotency_key)`
+     * — see its migration); the UPDATE this guards only ever changes
+     * `status`/`external_transfer_reference`, so today it cannot actually
+     * violate either of the other two (their columns are never touched by
+     * this statement). The message check below is defense-in-depth against
+     * that changing later, not a currently-live risk, mirroring
+     * InventoryReservationService::isReservationIdentityViolation()'s
+     * precision.
      */
     private function isUniqueViolation(QueryException $e): bool
     {
-        return in_array($e->getCode(), ['23000', '23505'], true);
+        $sqlState = (string) ($e->errorInfo[0] ?? $e->getCode());
+
+        return in_array($sqlState, ['23000', '23505'], true)
+            && str_contains($e->getMessage(), 'external_transfer_reference');
     }
 
     /** @return array<string, mixed> */

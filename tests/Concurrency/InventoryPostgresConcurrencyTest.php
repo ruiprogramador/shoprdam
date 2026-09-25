@@ -9,65 +9,65 @@ use Illuminate\Database\QueryException;
 use Illuminate\Support\Facades\DB;
 
 /**
- * REAL-ENGINE concurrency proof for the inventory reservation core
- * (docs/inventory/INVENTORY-RESERVATIONS.md §11). Not part of the default
- * suites (`phpunit.xml` lists Unit/Feature/Architecture only) and never run on
- * SQLite: it needs a disposable local MySQL/InnoDB database.
+ * REAL-ENGINE concurrency proof for the inventory reservation core, the
+ * PostgreSQL sibling of InventoryMysqlConcurrencyTest.php (see that file's
+ * header for the full scenario catalogue and protocol description; the two
+ * are line-for-line equivalent test-by-test, sharing worker.php and
+ * ConcurrencyHelpers.php verbatim).
  *
- * Every "buyer" here is a separate OS process (tests/Concurrency/worker.php)
- * with its own MySQL connection — not two operations issued one after the other
- * on one connection.
+ * The one behavioral difference this file asserts rather than assumes:
+ * PostgreSQL's default `transaction_isolation` is READ COMMITTED, not
+ * MySQL's REPEATABLE READ. The reservation core relies on explicit row
+ * locking (SELECT ... FOR UPDATE via lockForUpdate()), not on snapshot
+ * semantics, so this difference is not expected to change any outcome here
+ * — this suite is what actually proves that, rather than inferring it from
+ * the MySQL run.
  *
- * Two kinds of scenario:
+ * Lock-wait detection differs from MySQL: PostgreSQL exposes it directly on
+ * pg_stat_activity.wait_event_type, no join needed (no performance_schema
+ * equivalent). PostgreSQL also has no `innodb_lock_wait_timeout`-like cap by
+ * default (`lock_timeout` is 0 = wait forever); a genuine deadlock is instead
+ * caught by PostgreSQL's own deadlock detector (default deadlock_timeout=1s)
+ * and aborts one side with SQLSTATE 40P01. The app's fixed ascending-id lock
+ * order (proven deadlock-free below, same as MySQL) means this is not
+ * expected to fire, but the harness does not rely on any lock-wait ceiling
+ * from the server either way — it always ends every held lock itself via the
+ * `.commit` signal file.
  *
- * - DETERMINISTIC: worker A runs the real service call inside a still-open outer
- *   transaction, so it holds its InnoDB row locks; worker B is started behind it;
- *   this file then verifies in `performance_schema.data_lock_waits` that B's
- *   connection is genuinely blocked on a lock BEFORE A is allowed to commit.
- *   That is the exact behavior the design relies on: the loser waits, then
- *   re-evaluates its predicate against the winner's committed result.
- * - RACE: all workers are released from a barrier at once, over many rounds, and
- *   only the invariants are asserted (the interleaving is not controlled).
+ * Run:
  *
- * Run (see the design document):
- *
- *   INVENTORY_MYSQL_CONCURRENCY=1 DB_CONNECTION=mysql DB_HOST=127.0.0.1 DB_PORT=… \
+ *   INVENTORY_POSTGRES_CONCURRENCY=1 DB_CONNECTION=pgsql DB_HOST=127.0.0.1 DB_PORT=… \
  *   DB_DATABASE=<name>_concurrency_test DB_USERNAME=… DB_PASSWORD=… \
- *   [INVENTORY_CONCURRENCY_WORKER_PHP_ARGS="-d extension=pdo_mysql"] \
- *   php vendor/pestphp/pest/bin/pest tests/Concurrency
+ *   [INVENTORY_CONCURRENCY_WORKER_PHP_ARGS="-d extension=pdo_pgsql"] \
+ *   php vendor/pestphp/pest/bin/pest tests/Concurrency/InventoryPostgresConcurrencyTest.php
  *
  * against a database that has been `migrate`d. It refuses any database whose
  * name does not end in `_concurrency_test` or whose host is not local.
- *
- * Engine-agnostic helpers (mcDir/mcSpawn/mcWait/mcReady/mcSignal/mcResult/
- * mcJoin/mcRace/mcOutcomes/mcService/mcStatuses/mcReservedOrder) live in
- * ConcurrencyHelpers.php, shared with InventoryPostgresConcurrencyTest.php.
  */
 require __DIR__.'/ConcurrencyHelpers.php';
 
 beforeEach(function () {
-    if (getenv('INVENTORY_MYSQL_CONCURRENCY') !== '1') {
-        $this->markTestSkipped('Set INVENTORY_MYSQL_CONCURRENCY=1 and point DB_* at a disposable local MySQL *_concurrency_test database.');
+    if (getenv('INVENTORY_POSTGRES_CONCURRENCY') !== '1') {
+        $this->markTestSkipped('Set INVENTORY_POSTGRES_CONCURRENCY=1 and point DB_* at a disposable local PostgreSQL *_concurrency_test database.');
     }
 
     $connection = config('database.default');
     $settings = config("database.connections.{$connection}");
 
-    if ($connection !== 'mysql' || ! in_array($settings['host'], ['127.0.0.1', 'localhost'], true) || ! str_ends_with((string) $settings['database'], '_concurrency_test')) {
-        throw new RuntimeException('Refusing to run: the effective connection is not a disposable local MySQL *_concurrency_test database.');
+    if ($connection !== 'pgsql' || ! in_array($settings['host'], ['127.0.0.1', 'localhost'], true) || ! str_ends_with((string) $settings['database'], '_concurrency_test')) {
+        throw new RuntimeException('Refusing to run: the effective connection is not a disposable local PostgreSQL *_concurrency_test database.');
     }
 });
 
-/** Whether the given MySQL connection is currently waiting on an InnoDB lock held by another transaction. */
-function mcAwaitLockWait(int $connectionId, float $seconds = 30.0): bool
+/** Whether the given PostgreSQL backend pid is currently waiting on a lock held by another transaction. */
+function mcAwaitLockWait(int $backendPid, float $seconds = 30.0): bool
 {
     $deadline = microtime(true) + $seconds;
 
     do {
         $waiting = DB::selectOne(
-            'select count(*) as n from performance_schema.data_lock_waits w '
-            .'join performance_schema.threads t on t.thread_id = w.requesting_thread_id where t.processlist_id = ?',
-            [$connectionId],
+            "select count(*) as n from pg_stat_activity where pid = ? and wait_event_type = 'Lock'",
+            [$backendPid],
         )->n;
 
         if ($waiting > 0) {
@@ -84,21 +84,18 @@ function mcAwaitLockWait(int $connectionId, float $seconds = 30.0): bool
 // The real engine, and the schema on it
 // ---------------------------------------------------------------------
 
-it('runs on real MySQL/InnoDB at the production default isolation level', function () {
-    $server = DB::selectOne('select version() as v, @@transaction_isolation as i, @@innodb_lock_wait_timeout as t, @@default_storage_engine as e');
+it('runs on real PostgreSQL at its actual default isolation level (READ COMMITTED, not MySQL\'s REPEATABLE READ)', function () {
+    $server = DB::selectOne("select version() as v, current_setting('transaction_isolation') as i, current_setting('lock_timeout') as t");
 
-    expect($server->i)->toBe('REPEATABLE-READ')
-        ->and($server->e)->toBe('InnoDB')
-        ->and(DB::getDriverName())->toBe('mysql');
+    expect($server->i)->toBe('read committed')
+        ->and(DB::getDriverName())->toBe('pgsql');
 
-    fwrite(STDERR, "\n[mysql] {$server->v} isolation={$server->i} lock_wait_timeout={$server->t}s\n");
+    fwrite(STDERR, "\n[pgsql] {$server->v} isolation={$server->i} lock_timeout={$server->t}\n");
 });
 
-it('enforces the CHECK constraints and RESTRICT foreign keys on MySQL itself, not only the SQLite triggers', function () {
-    // Aliased: MySQL 8 returns information_schema column names in upper case.
+it('enforces the CHECK constraints and RESTRICT foreign keys on PostgreSQL itself, not only the SQLite triggers', function () {
     $checks = array_column(DB::select(
-        'select constraint_name as name from information_schema.check_constraints where constraint_schema = ?',
-        [DB::getDatabaseName()],
+        "select constraint_name as name from information_schema.check_constraints where constraint_schema = 'public'",
     ), 'name');
 
     expect($checks)->toContain(
@@ -130,7 +127,7 @@ it('enforces the CHECK constraints and RESTRICT foreign keys on MySQL itself, no
         'second reservation for one OrderItem' => fn () => DB::table('inventory_reservations')->insert($row),
     ];
 
-    $codes = [];
+    $sqlStates = [];
 
     try {
         foreach ($refused as $label => $attempt) {
@@ -140,23 +137,21 @@ it('enforces the CHECK constraints and RESTRICT foreign keys on MySQL itself, no
         try {
             DB::table('inventories')->where('id', $inventoryId)->update(['reserved_quantity' => 6]);
         } catch (QueryException $e) {
-            $codes[] = $e->errorInfo[1];
+            $sqlStates[] = $e->errorInfo[0];
         }
     } finally {
-        // This fixture is deliberately inconsistent (reserved=2, no reservation): remove it,
-        // so the final integrity audit of the real-concurrency data is not polluted by it.
         DB::table('inventory_reservations')->where('inventory_id', $inventoryId)->delete();
         DB::table('inventories')->where('id', $inventoryId)->delete();
     }
 
-    expect($codes)->toBe([3819]); // ER_CHECK_CONSTRAINT_VIOLATED — the constraint is really enforced
+    expect($sqlStates)->toBe(['23514']); // check_violation — the constraint is really enforced
 });
 
 // ---------------------------------------------------------------------
 // 1. stock = 1, two buyers, DIFFERENT Orders
 // ---------------------------------------------------------------------
 
-it('stock=1, two different Orders: B is genuinely blocked behind A\'s InnoDB row lock, then refused — exactly one reservation', function () {
+it('stock=1, two different Orders: B is genuinely blocked behind A\'s row lock, then refused — exactly one reservation', function () {
     $store = Store::factory()->create();
     $product = inventoryProduct($store);
     inventorySeed($product, 1);
@@ -169,7 +164,7 @@ it('stock=1, two different Orders: B is genuinely blocked behind A\'s InnoDB row
     $ids = mcReady($dir, ['A', 'B']);
 
     mcSignal($dir, 'A.go');
-    mcWait($dir, 'A.locked');           // A ran reserve(1) and still holds its row locks, uncommitted
+    mcWait($dir, 'A.locked');
     mcSignal($dir, 'B.go');
 
     expect(mcAwaitLockWait($ids['B']))->toBeTrue('B never blocked on a lock')
@@ -184,7 +179,6 @@ it('stock=1, two different Orders: B is genuinely blocked behind A\'s InnoDB row
     expect($ra['status'])->toBe('ok')
         ->and($rb['status'])->toBe('error')
         ->and($rb['class'])->toBe(InsufficientStockException::class)
-        // B waited for A: it finished only after A committed
         ->and($rb['finished_at'])->toBeGreaterThanOrEqual($ra['finished_at'])
         ->and(inventoryState($product))->toBe(['on_hand' => 1, 'reserved' => 1, 'available' => 0])
         ->and(mcStatuses($orderA))->toBe(['reserved'])
@@ -237,7 +231,7 @@ it('duplicate concurrent reserve() of one Order: the loser waits on the unique c
 
     expect($ra['status'])->toBe('ok')
         ->and($rb['status'])->toBe('ok')
-        ->and($rb['value'])->toBe($ra['value'])   // the very same reservation
+        ->and($rb['value'])->toBe($ra['value'])
         ->and(inventoryState($product))->toBe(['on_hand' => 5, 'reserved' => 2, 'available' => 3])
         ->and(mcStatuses($order))->toBe(['reserved']);
 });
@@ -420,14 +414,12 @@ it('multi-line Orders whose lines are stored in OPPOSITE product order never dea
     foreach (range(1, 25) as $round) {
         $p1 = inventoryProduct($store, '10.00', 'P1');
         $p2 = inventoryProduct($store, '10.00', 'P2');
-        // Inventory ids deliberately NOT in product-id order.
         inventorySeed($p2, 10);
         inventorySeed($p1, 10);
 
         $orderX = inventoryOrder($store, [[$p1, 1], [$p2, 1]]);
         $orderY = inventoryOrder($store, [[$p1, 1], [$p2, 1]]);
 
-        // Same price, same quantity: the Order still adds up, but Y's lines are now stored p2 then p1.
         [$first, $second] = $orderY->items->sortBy('id')->values();
         DB::table('order_items')->where('id', $first->id)->update(['product_id' => $p2->id]);
         DB::table('order_items')->where('id', $second->id)->update(['product_id' => $p1->id]);
@@ -453,8 +445,8 @@ it('an Order whose LAST line lacks stock leaves nothing behind, even while anoth
     foreach (range(1, 12) as $round) {
         $p1 = inventoryProduct($store, '10.00', 'P1');
         $p2 = inventoryProduct($store, '10.00', 'P2');
-        inventorySeed($p1, 1);   // the only unit of P1
-        inventorySeed($p2, 1);   // P2 cannot satisfy a request for 5
+        inventorySeed($p1, 1);
+        inventorySeed($p2, 1);
 
         $failing = inventoryOrder($store, [[$p1, 1], [$p2, 5]]);
         $other = inventoryOrder($store, [[$p1, 1]]);
@@ -464,7 +456,6 @@ it('an Order whose LAST line lacks stock leaves nothing behind, even while anoth
             ['name' => 'Y', 'action' => 'reserve', 'order' => $other],
         ]);
 
-        // X may take P1 first and roll it back, or find it already taken: either way X fails and Y must not lose the unit to a ghost hold.
         expect($results['X']['class'] ?? null)->toBe(InsufficientStockException::class, "round {$round}: ".json_encode($results))
             ->and($results['Y']['status'])->toBe('ok')
             ->and(mcStatuses($failing))->toBe([])
@@ -504,7 +495,6 @@ it('multi-line commit() of one Order and release() of another, over shared inven
         expect(array_values(mcOutcomes($results)))->toBe(['ok', 'ok'], "round {$round}: ".json_encode($results))
             ->and(mcStatuses($orderX))->toBe(['committed', 'committed'])
             ->and(mcStatuses($orderY))->toBe(['released', 'released'])
-            // X consumed one unit of each; Y's holds went back
             ->and(inventoryState($p1))->toBe(['on_hand' => 9, 'reserved' => 0, 'available' => 9])
             ->and(inventoryState($p2))->toBe(['on_hand' => 9, 'reserved' => 0, 'available' => 9]);
     }
@@ -519,9 +509,9 @@ it('after all of the above, every inventory row satisfies the conservation equat
 
     $violations = DB::selectOne(
         "select
-            sum(i.reserved_quantity < 0) as negative_reserved,
-            sum(i.on_hand_quantity < i.reserved_quantity) as over_reserved,
-            sum(i.reserved_quantity <> coalesce((select sum(r.quantity) from inventory_reservations r where r.inventory_id = i.id and r.status = 'reserved'), 0)) as counter_drift
+            sum(case when i.reserved_quantity < 0 then 1 else 0 end) as negative_reserved,
+            sum(case when i.on_hand_quantity < i.reserved_quantity then 1 else 0 end) as over_reserved,
+            sum(case when i.reserved_quantity <> coalesce((select sum(r.quantity) from inventory_reservations r where r.inventory_id = i.id and r.status = 'reserved'), 0) then 1 else 0 end) as counter_drift
          from inventories i"
     );
 

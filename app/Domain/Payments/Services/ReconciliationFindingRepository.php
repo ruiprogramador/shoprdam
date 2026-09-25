@@ -7,6 +7,7 @@ use App\Domain\Payments\DTOs\ReconciliationClassification;
 use App\Domain\Payments\Enums\ReconciliationCategory;
 use App\Domain\Payments\Enums\ReconciliationResolutionReason;
 use App\Domain\Payments\Enums\ReconciliationStatus;
+use App\Domain\Payments\Exceptions\ReconciliationEpisodeRaceUnresolvedException;
 use App\Domain\Payments\Models\ReconciliationFinding;
 use Illuminate\Database\QueryException;
 use Illuminate\Support\Facades\DB;
@@ -22,12 +23,12 @@ use Illuminate\Support\Facades\DB;
  * it (docs/financial/RECONCILIATION.md §4/§14).
  *
  * The `unique(active_identity)` constraint (§9.1) is the entire CAS backbone
- * — insert-and-recover-on-unique-violation, the identical idiom
- * App\Services\Wallet\WalletTransactionService::record() already uses for a
- * conceptually identical problem. No provider HTTP call ever happens inside
- * any transaction here (§7, §12) — this class only ever receives an
- * already-computed ReconciliationClassification, never calls a provider
- * itself.
+ * — a savepoint-protected insert-and-recover, the identical PostgreSQL-safe
+ * idiom App\Services\Wallet\WalletTransactionService::record() uses for a
+ * conceptually identical problem (see openOrUpdateEpisode()'s own docblock).
+ * No provider HTTP call ever happens inside any transaction here (§7, §12)
+ * — this class only ever receives an already-computed
+ * ReconciliationClassification, never calls a provider itself.
  */
 class ReconciliationFindingRepository
 {
@@ -83,6 +84,26 @@ class ReconciliationFindingRepository
         });
     }
 
+    /**
+     * PostgreSQL-safe idempotent-insert algorithm, savepoint-based — the
+     * same one App\Services\Wallet\WalletTransactionService::record() uses,
+     * for the same reason (see that method's own docblock for the full
+     * reasoning): an earlier version of this method used `insertOrIgnore()`,
+     * reconsidered after an adversarial audit found MySQL/MariaDB's
+     * `IGNORE` modifier cancels strict-mode error escalation for its one
+     * statement, so it can silently insert a *coerced/truncated* row
+     * (e.g. a `local_state`/`remote_state` value over 40 characters) rather
+     * than rejecting it — a real risk `create()` never had. `create()` is
+     * wrapped in its own, inner `DB::transaction()` instead, making it a
+     * real, targeted savepoint: a genuine `unique(active_identity)`
+     * violation rolls back to that savepoint (verified against the
+     * installed Laravel version — see
+     * WalletTransactionService::record()'s docblock for the exact
+     * mechanism) before this method's own `catch` ever runs, so the
+     * re-read below never touches a transaction PostgreSQL has aborted, on
+     * any engine, and every value is validated exactly as strictly as
+     * `create()` always was.
+     */
     private function openOrUpdateEpisode(ReconciliationCandidate $candidate, ReconciliationClassification $classification): ReconciliationFinding
     {
         return DB::transaction(function () use ($candidate, $classification) {
@@ -100,18 +121,19 @@ class ReconciliationFindingRepository
             $attributes = $this->newEpisodeAttributes($candidate, $classification, $activeIdentity);
 
             try {
-                return ReconciliationFinding::create($attributes);
+                // Its own savepoint (see this method's own docblock) — a
+                // real ROLLBACK TO SAVEPOINT runs, undoing only this insert
+                // attempt, before the catch below ever executes.
+                return DB::transaction(fn () => ReconciliationFinding::create($attributes));
             } catch (QueryException $e) {
-                if (! $this->isUniqueViolation($e)) {
+                if (! $this->isActiveIdentityUniqueViolation($e)) {
                     throw $e;
                 }
 
                 // Lost the unique(active_identity) race to a concurrent
-                // reconciliation pass — the same "insert, recover on the
-                // known unique-constraint race" pattern used throughout this
-                // codebase (e.g. WalletTransactionService::record()). The
-                // winner's row is updated with this observation instead of
-                // a second row ever being created.
+                // reconciliation pass — the savepoint above already rolled
+                // this attempt back, so this SELECT runs on a healthy
+                // transaction on every engine, including PostgreSQL.
                 $winner = ReconciliationFinding::query()
                     ->where('active_identity', $activeIdentity)
                     ->lockForUpdate()
@@ -119,15 +141,25 @@ class ReconciliationFindingRepository
 
                 if ($winner === null) {
                     // The winner resolved (and cleared active_identity)
-                    // between the failed insert and this re-read — genuinely
-                    // rare, and safe to treat as "nothing currently open";
-                    // the next reconciliation pass will observe fresh state.
-                    throw $e;
+                    // between the failed insert and this re-read — see
+                    // ReconciliationEpisodeRaceUnresolvedException's own
+                    // docblock for why this is safe to fail closed on
+                    // rather than retry inline.
+                    throw ReconciliationEpisodeRaceUnresolvedException::forIdentity($activeIdentity);
                 }
 
                 return $this->applyObservation($winner, $classification);
             }
         });
+    }
+
+    /** Portable across drivers — mirrors InventoryReservationService::isReservationIdentityViolation()'s precision. */
+    private function isActiveIdentityUniqueViolation(QueryException $e): bool
+    {
+        $sqlState = (string) ($e->errorInfo[0] ?? $e->getCode());
+
+        return in_array($sqlState, ['23000', '23505'], true)
+            && str_contains($e->getMessage(), 'active_identity');
     }
 
     private function applyObservation(ReconciliationFinding $existing, ReconciliationClassification $classification): ReconciliationFinding
@@ -178,11 +210,5 @@ class ReconciliationFindingRepository
     private function activeIdentity(ReconciliationCandidate $candidate): string
     {
         return "{$candidate->provider}:{$candidate->providerReference}";
-    }
-
-    /** Portable across drivers — mirrors PayoutEventProcessor::isUniqueViolation() exactly. */
-    private function isUniqueViolation(QueryException $e): bool
-    {
-        return in_array($e->getCode(), ['23000', '23505'], true);
     }
 }

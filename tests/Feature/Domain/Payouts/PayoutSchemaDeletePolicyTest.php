@@ -1,7 +1,5 @@
 <?php
 
-use Illuminate\Support\Facades\DB;
-
 /**
  * Complements tests/Architecture/PayoutFinancialHistoryAppendOnlyTest's
  * text-based scan of the migration source with a check of the *actual*
@@ -19,9 +17,7 @@ use Illuminate\Support\Facades\DB;
  */
 function foreignKeyDeleteRules(string $table): array
 {
-    return collect(DB::select("PRAGMA foreign_key_list('{$table}')"))
-        ->mapWithKeys(fn ($row) => [$row->from => $row->on_delete])
-        ->all();
+    return dbForeignKeyDeleteRules($table);
 }
 
 it('enforces RESTRICT at the database level for every financial foreign key on payouts', function () {

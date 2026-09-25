@@ -14,7 +14,6 @@ use App\Models\Store;
 use App\Payouts\Testing\FakePayoutProvider;
 use App\Services\Wallet\WalletService;
 use App\Services\Wallet\WalletTransactionService;
-use Illuminate\Database\QueryException;
 
 function fakeProvider(): FakePayoutProvider
 {
@@ -186,7 +185,7 @@ it('refuses to delete a PayoutAttempt that a Payout still points to as its curre
 
     expect($payout->fresh()->current_payout_attempt_id)->toBe($attempt->id);
 
-    expect(fn () => $attempt->delete())->toThrow(QueryException::class);
+    expectDatabaseRefusal(fn () => $attempt->delete());
 
     expect(PayoutAttempt::find($attempt->id))->not->toBeNull()
         ->and($payout->fresh()->current_payout_attempt_id)->toBe($attempt->id);
@@ -196,7 +195,7 @@ it('refuses to delete a Payout that still has a PayoutAttempt referencing it —
     $payout = reservedPayout();
     app(PayoutService::class)->createDurableAttempt($payout, 'fake');
 
-    expect(fn () => $payout->delete())->toThrow(QueryException::class);
+    expectDatabaseRefusal(fn () => $payout->delete());
 
     expect(Payout::find($payout->id))->not->toBeNull();
 });

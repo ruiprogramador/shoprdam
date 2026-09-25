@@ -259,11 +259,11 @@ Opt-in and outside every `phpunit.xml` suite. Against a **disposable local** MyS
 ```
 INVENTORY_MYSQL_CONCURRENCY=1 DB_CONNECTION=mysql DB_HOST=127.0.0.1 DB_PORT=… \
 DB_DATABASE=<name>_concurrency_test DB_USERNAME=… DB_PASSWORD=… \
-[INVENTORY_MYSQL_WORKER_PHP_ARGS="-d extension=pdo_mysql"] \
+[INVENTORY_CONCURRENCY_WORKER_PHP_ARGS="-d extension=pdo_mysql"] \
 php vendor/pestphp/pest/bin/pest tests/Concurrency
 ```
 
-Note: the repository's migrations had never run on MySQL before this round — `2026_09_17_090000_create_payment_reconciliation_findings_table` (a previous branch) fails on MySQL (index name > 64 characters). It is out of scope here; the disposable database was prepared by marking that one migration as run. The two inventory migrations, and everything they depend on, migrate cleanly on MySQL 8.0.30.
+Note: the repository's migrations had never run on MySQL before this round — `2026_09_17_090000_create_payment_reconciliation_findings_table` (a previous branch) fails on MySQL (index name > 64 characters), so the disposable database used for this suite's own run was prepared by marking that one migration as run. **That defect is still open** — see `docs/architecture/DATABASE-SUPPORT.md` §3 for the full account, including why an in-place edit of that migration (tried on an earlier branch) was reverted under this repository's migration-immutability rule, why a simple forward migration cannot fix a *fresh* MySQL install either, and why the real fix (a Laravel schema-dump baseline) needs a live database this project has not yet had access to. The two inventory migrations, and everything they depend on, migrate cleanly on MySQL 8.0.30 once that one unrelated migration is worked around; database-wide MySQL fresh-install compatibility is tracked centrally in `docs/architecture/DATABASE-SUPPORT.md`, not here.
 
 ## 12. Expiry and late payment — NOT implemented (STOP condition 9)
 
@@ -429,7 +429,7 @@ Expiry-CAS probe: N/A (no expiry).
 9. The unique-race retry may fail closed inside a caller-owned REPEATABLE READ transaction.
 10. Static scans have the blind spots in §17.
 11. **Operational completeness is deliberately absent** (§0): correctness of the reservation domain is not the same as a working inventory system. Nothing creates stock, nothing calls the service, nothing expires or cancels a hold, nothing commits on payment.
-12. **Pre-existing, out of scope:** migration `2026_09_17_090000_create_payment_reconciliation_findings_table` fails on MySQL (identifier > 64 chars), so the full migration set had never run on MySQL; and `config/database.php` references `PDO::MYSQL_ATTR_SSL_CA`, deprecated on PHP 8.5. Neither was touched.
+12. **Pre-existing, out of scope, tracked centrally:** migration `2026_09_17_090000_create_payment_reconciliation_findings_table` still exceeds MySQL/MariaDB's 64-character identifier limit (and, separately, PostgreSQL's stricter 63-character limit) — see `docs/architecture/DATABASE-SUPPORT.md` §3 for why it remains unfixed (the historical migration is immutable, and a proper fix needs a live-database-generated schema baseline this project has not yet had access to) and `tests/Architecture/DatabaseMigrationPortabilityTest.php` for the mechanical, exact-set regression guard around it. `config/database.php` still references `PDO::MYSQL_ATTR_SSL_CA`, deprecated on PHP 8.5 — left untouched there as a separate, non-blocking PHP/MySQL compatibility warning (a correct fix needs PHP-version feature-detection, since this repository supports PHP 8.2+ and the replacement constant needs 8.4+).
 
 ## 22. Future decisions
 

@@ -163,7 +163,7 @@ it('C: the decision is made by the UPDATE, not by an earlier read — a competit
     $armed = true;
 
     DB::listen(function (QueryExecuted $q) use (&$armed, &$competitor, $b) {
-        if ($armed && str_starts_with($q->sql, 'select') && str_contains($q->sql, 'from "inventories"')) {
+        if ($armed && str_starts_with($q->sql, 'select') && preg_match('/\bfrom\s+[`"]?inventories[`"]?/i', $q->sql)) {
             $armed = false;
             $competitor = invService()->reserve($b);
         }
@@ -189,11 +189,11 @@ it('C: reserving issues exactly one conditional UPDATE and never SELECTs a stock
     $queries = invCaptureSql(fn () => invService()->reserve($order));
     $sql = array_column($queries, 'sql');
 
-    $inventoryUpdates = array_values(array_filter($sql, fn ($s) => str_starts_with($s, 'update "inventories"')));
-    $inventorySelects = array_filter($sql, fn ($s) => str_starts_with($s, 'select') && str_contains($s, 'from "inventories"'));
+    $inventoryUpdates = array_values(array_filter($sql, fn ($s) => (bool) preg_match('/^update\s+[`"]?inventories[`"]?/i', $s)));
+    $inventorySelects = array_filter($sql, fn ($s) => str_starts_with($s, 'select') && preg_match('/\bfrom\s+[`"]?inventories[`"]?/i', $s));
 
     expect($inventoryUpdates)->toHaveCount(1)
-        ->and($inventoryUpdates[0])->toContain('"reserved_quantity" = reserved_quantity + 2')
+        ->and($inventoryUpdates[0])->toContain('= reserved_quantity + 2') // left side is quoted per-engine, right side (DB::raw) never is
         ->and($inventoryUpdates[0])->toContain('on_hand_quantity - reserved_quantity >= ?');
 
     foreach ($inventorySelects as $select) {
@@ -236,7 +236,7 @@ it('D: a lost unique(order_item_id) race rolls the loser back completely and it 
     $armed = true;
 
     DB::listen(function (QueryExecuted $q) use (&$armed, $inventoryId, $item) {
-        if ($armed && str_starts_with($q->sql, 'select') && str_contains($q->sql, 'from "inventory_reservations"')) {
+        if ($armed && str_starts_with($q->sql, 'select') && preg_match('/\bfrom\s+[`"]?inventory_reservations[`"]?/i', $q->sql)) {
             $armed = false;
             DB::table('inventory_reservations')->insert([
                 'inventory_id' => $inventoryId, 'order_item_id' => $item->id, 'quantity' => 2,
@@ -362,7 +362,7 @@ it('S: an exception halfway through a multi-line reservation rolls every line ba
     $updates = 0;
 
     DB::listen(function (QueryExecuted $q) use (&$updates) {
-        if (str_starts_with($q->sql, 'update "inventories"') && ++$updates === 2) {
+        if (preg_match('/^update\s+[`"]?inventories[`"]?/i', $q->sql) && ++$updates === 2) {
             throw new RuntimeException('simulated crash after the first line was reserved');
         }
     });
@@ -393,7 +393,7 @@ it('locks inventory rows in ascending Inventory-id order regardless of the order
     $queries = invCaptureSql(fn () => invService()->reserve($order));
 
     $locked = collect($queries)
-        ->filter(fn ($q) => str_starts_with($q['sql'], 'update "inventories"'))
+        ->filter(fn ($q) => (bool) preg_match('/^update\s+[`"]?inventories[`"]?/i', $q['sql']))
         ->map(fn ($q) => $q['bindings'][1]) // (updated_at, id, quantity)
         ->values()
         ->all();
@@ -718,8 +718,8 @@ it('a line-backed Order whose amount no longer matches its lines is refused befo
 // ---------------------------------------------------------------------
 
 it('Q: every inventory foreign key is RESTRICT and the database refuses to delete a parent that a reservation depends on', function () {
-    $rules = fn (string $table) => collect(DB::select("PRAGMA foreign_key_list('{$table}')"))
-        ->mapWithKeys(fn ($r) => [$r->from => [$r->table, $r->on_delete]])->all();
+    $rules = fn (string $table) => collect(dbForeignKeyInfo($table))
+        ->map(fn ($info) => [$info['table'], $info['rule']])->all();
 
     expect($rules('inventories'))->toEqual(['product_id' => ['products', 'RESTRICT']])
         ->and($rules('inventory_reservations'))->toEqual([

@@ -1,0 +1,130 @@
+name: real-engine-concurrency
+
+# Kept OUT of the pull_request/push path on purpose: each engine's real,
+# independent-OS-process Inventory concurrency suite (16 tests, but every
+# barrier/race scenario runs many rounds of separate PHP processes) took
+# ~11-14 minutes on real MySQL 8.0.44/MariaDB 11.8.9/PostgreSQL 16.15 —
+# see docs/architecture/DATABASE-SUPPORT.md §13. Running that on every PR
+# would make CI itself the thing standing between a change and review, so
+# it runs nightly and on demand instead. tests.yml (SQLite, fast) and its
+# real-engine-financial job (real motors, ~7-9 min) remain the PR-blocking
+# signal.
+on:
+  schedule:
+    - cron: '0 3 * * *' # 03:00 UTC daily
+  workflow_dispatch: {}
+
+jobs:
+  inventory-concurrency:
+    name: inventory-concurrency (${{ matrix.engine }})
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          # No password on the healthcheck itself: mysqladmin ping reports
+          # the server alive (exit 0) as soon as it accepts connections,
+          # even on an auth failure — confirmed against a real mysql:8.0
+          # container.
+          - engine: mysql
+            connection: mysql
+            image: mysql:8.0
+            db_port: 3306
+            db_user: root
+            env_flag: INVENTORY_MYSQL_CONCURRENCY
+            test_file: tests/Concurrency/InventoryMysqlConcurrencyTest.php
+            health_cmd: mysqladmin ping
+          # mysqladmin does NOT exist on the mariadb:11 image (confirmed:
+          # exit 127, "not found") — healthcheck.sh is that image's own
+          # documented healthcheck mechanism, not a MySQL command reused
+          # on the assumption the two engines are interchangeable here.
+          - engine: mariadb
+            connection: mariadb
+            image: mariadb:11
+            db_port: 3306
+            db_user: root
+            env_flag: INVENTORY_MARIADB_CONCURRENCY
+            test_file: tests/Concurrency/InventoryMariadbConcurrencyTest.php
+            health_cmd: healthcheck.sh --connect --innodb_initialized
+          - engine: pgsql
+            connection: pgsql
+            image: postgres:16
+            db_port: 5432
+            db_user: postgres
+            env_flag: INVENTORY_POSTGRES_CONCURRENCY
+            test_file: tests/Concurrency/InventoryPostgresConcurrencyTest.php
+            health_cmd: pg_isready -U postgres
+
+    services:
+      db:
+        image: ${{ matrix.image }}
+        env:
+          MYSQL_ROOT_PASSWORD: ci_disposable_only
+          MYSQL_DATABASE: shoprdam_concurrency_test
+          MARIADB_ROOT_PASSWORD: ci_disposable_only
+          MARIADB_DATABASE: shoprdam_concurrency_test
+          POSTGRES_PASSWORD: ci_disposable_only
+          POSTGRES_DB: shoprdam_concurrency_test
+        ports:
+          - ${{ matrix.db_port }}:${{ matrix.db_port }}
+        options: >-
+          --health-cmd="${{ matrix.health_cmd }}"
+          --health-interval=5s
+          --health-timeout=5s
+          --health-retries=10
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup PHP
+        uses: shivammathur/setup-php@v2
+        with:
+          php-version: 8.4
+          tools: composer:v2
+          extensions: pdo_mysql, mysqli, pdo_pgsql, pgsql, bcmath
+
+      - name: Install Dependencies
+        run: composer install --no-interaction --prefer-dist --optimize-autoloader
+
+      - name: Copy Environment File
+        run: cp .env.example .env
+
+      - name: Generate Application Key
+        run: php artisan key:generate
+
+      # Its own database, named *_concurrency_test, distinct from
+      # real-engine-financial's shoprdam_ci_test — this suite never reuses
+      # a database another job/step wrote to.
+      - name: Migrate the disposable *_concurrency_test database
+        env:
+          DB_CONNECTION: ${{ matrix.connection }}
+          DB_HOST: 127.0.0.1
+          DB_PORT: ${{ matrix.db_port }}
+          DB_DATABASE: shoprdam_concurrency_test
+          DB_USERNAME: ${{ matrix.db_user }}
+          DB_PASSWORD: ci_disposable_only
+        run: php artisan migrate --force
+
+      # A matrix value cannot be used as an `env:` KEY directly (only as a
+      # value) — GitHub Actions does not interpolate mapping keys. Writing
+      # it to $GITHUB_ENV here sets it for every later step of THIS job run
+      # only — each matrix entry is its own separate job run, so MySQL's
+      # run never also sets MariaDB's/PostgreSQL's flag or vice versa.
+      - name: Set this engine's own concurrency opt-in flag
+        run: echo "${{ matrix.env_flag }}=1" >> "$GITHUB_ENV"
+
+      # tests/Concurrency/*ConcurrencyTest.php's own safety guard requires
+      # DB_HOST to be literally 127.0.0.1/localhost and DB_DATABASE to end
+      # in _concurrency_test — both true here, genuinely, not bypassed:
+      # GitHub Actions' `services:` exposes the container on the runner's
+      # own 127.0.0.1 via the published port.
+      - name: Real, independent-process Inventory concurrency suite
+        env:
+          DB_CONNECTION: ${{ matrix.connection }}
+          DB_HOST: 127.0.0.1
+          DB_PORT: ${{ matrix.db_port }}
+          DB_DATABASE: shoprdam_concurrency_test
+          DB_USERNAME: ${{ matrix.db_user }}
+          DB_PASSWORD: ci_disposable_only
+        run: php vendor/bin/pest ${{ matrix.test_file }}

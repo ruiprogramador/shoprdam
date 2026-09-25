@@ -92,6 +92,22 @@ use Illuminate\Support\Facades\Log;
  */
 class InventoryReservationService
 {
+    /**
+     * Bounds the retry loop below. The identity-violation race (reserve()
+     * only) always resolves on the first retry — the winner has, by
+     * definition, already committed by the time this transaction's INSERT
+     * fails against it — so the bound is inert there, a safety cap only. The
+     * MariaDB snapshot conflict (see isMariadbSnapshotConflict()) is a real
+     * N-way race: under the 4-way barrier scenario in
+     * tests/Concurrency/InventoryMariadbConcurrencyTest.php a loser can
+     * collide again on a retry before winning or legitimately losing to
+     * InsufficientStockException (a different, non-retried exception). 8
+     * gives that scenario comfortable headroom while still failing closed —
+     * see the class docblock's "No catch-and-compensate" — rather than
+     * retrying indefinitely under pathological contention.
+     */
+    private const MAX_RETRY_ATTEMPTS = 8;
+
     public function __construct(
         private readonly OrderLineIntegrityChecker $orderLines = new OrderLineIntegrityChecker,
     ) {}
@@ -112,17 +128,21 @@ class InventoryReservationService
      */
     public function reserve(Order $order): Collection
     {
-        try {
-            return DB::transaction(fn () => $this->reserveWithinTransaction($order));
-        } catch (QueryException $e) {
-            if (! $this->isReservationIdentityViolation($e)) {
-                throw $e;
+        for ($attempt = 1; ; $attempt++) {
+            try {
+                return DB::transaction(fn () => $this->reserveWithinTransaction($order));
+            } catch (QueryException $e) {
+                // A concurrent identical reserve() won the unique(order_item_id)
+                // claim; this attempt rolled back completely — retry now
+                // observes the winner's committed rows. Or: MariaDB's snapshot
+                // conflict (see isMariadbSnapshotConflict()) on the Inventory
+                // row lock — retry from a clean transaction, per its own
+                // message. Anything else is a real error and propagates.
+                if ($attempt >= self::MAX_RETRY_ATTEMPTS
+                    || ! ($this->isReservationIdentityViolation($e) || $this->isMariadbSnapshotConflict($e))) {
+                    throw $e;
+                }
             }
-
-            // A concurrent identical reserve() won the unique(order_item_id)
-            // claim; this attempt rolled back completely. Run once more, now
-            // observing the winner's committed rows.
-            return DB::transaction(fn () => $this->reserveWithinTransaction($order));
         }
     }
 
@@ -295,40 +315,51 @@ class InventoryReservationService
     {
         $orderId = (int) $order->getKey();
 
-        return DB::transaction(function () use ($orderId, $target) {
-            $items = OrderItem::query()->where('order_id', $orderId)->get(['id', 'product_id', 'quantity'])->keyBy('id');
+        for ($attempt = 1; ; $attempt++) {
+            try {
+                return DB::transaction(function () use ($orderId, $target) {
+                    $items = OrderItem::query()->where('order_id', $orderId)->get(['id', 'product_id', 'quantity'])->keyBy('id');
 
-            $reservations = InventoryReservation::query()
-                ->whereIn('order_item_id', $items->keys()->all())
-                ->orderBy('inventory_id')
-                ->orderBy('id')
-                ->get();
+                    $reservations = InventoryReservation::query()
+                        ->whereIn('order_item_id', $items->keys()->all())
+                        ->orderBy('inventory_id')
+                        ->orderBy('id')
+                        ->get();
 
-            if ($reservations->isEmpty()) {
-                throw InvalidReservationException::noReservations($orderId);
-            }
+                    if ($reservations->isEmpty()) {
+                        throw InvalidReservationException::noReservations($orderId);
+                    }
 
-            if ($reservations->count() !== $items->count()) {
-                throw InventoryIntegrityException::partiallyReserved($orderId);
-            }
+                    if ($reservations->count() !== $items->count()) {
+                        throw InventoryIntegrityException::partiallyReserved($orderId);
+                    }
 
-            $inventories = Inventory::query()->whereIn('id', $reservations->pluck('inventory_id')->unique()->all())->get(['id', 'product_id'])->keyBy('id');
+                    $inventories = Inventory::query()->whereIn('id', $reservations->pluck('inventory_id')->unique()->all())->get(['id', 'product_id'])->keyBy('id');
 
-            $changed = 0;
+                    $changed = 0;
 
-            foreach ($reservations as $reservation) {
-                /** @var OrderItem|null $item */
-                $item = $items->get($reservation->order_item_id);
+                    foreach ($reservations as $reservation) {
+                        /** @var OrderItem|null $item */
+                        $item = $items->get($reservation->order_item_id);
 
-                $this->assertMatchesSource($reservation, $item, $inventories->get($reservation->inventory_id));
+                        $this->assertMatchesSource($reservation, $item, $inventories->get($reservation->inventory_id));
 
-                if ($this->transition($reservation, $target)) {
-                    $changed++;
+                        if ($this->transition($reservation, $target)) {
+                            $changed++;
+                        }
+                    }
+
+                    return $changed;
+                });
+            } catch (QueryException $e) {
+                // MariaDB snapshot conflict on the Inventory row lock taken by
+                // transition() — same signal and remedy as reserve()'s, see
+                // isMariadbSnapshotConflict(). Anything else is a real error.
+                if ($attempt >= self::MAX_RETRY_ATTEMPTS || ! $this->isMariadbSnapshotConflict($e)) {
+                    throw $e;
                 }
             }
-
-            return $changed;
-        });
+        }
     }
 
     /**
@@ -463,5 +494,36 @@ class InventoryReservationService
             || ($sqlState === '23000' && ($driverCode === 1062 || str_contains($message, 'UNIQUE constraint failed')));
 
         return $isUnique && str_contains($message, 'order_item_id');
+    }
+
+    /**
+     * MariaDB ships with `innodb_snapshot_isolation=ON` (no such setting on
+     * MySQL; PostgreSQL has no equivalent behavior either) — an optimistic
+     * check on locking reads that makes `SELECT ... FOR UPDATE` (both
+     * lockForUpdate() call sites above) fail with this exact error instead of
+     * blocking on the row lock, when the row was written by a transaction
+     * that committed after this one's snapshot was taken. Confirmed on real
+     * MariaDB 11.8.9 (`tests/Concurrency/InventoryMariadbConcurrencyTest.php`)
+     * — real MySQL 8.0.44 and PostgreSQL 16 do not exhibit it, confirmed on
+     * the same operations. MariaDB's own message names the correct remedy —
+     * restart the transaction — which is exactly what retrying
+     * DB::transaction() from scratch does (never resuming the failed one).
+     *
+     * Matched narrowly on SQLSTATE + driver code + both fixed phrases of
+     * MariaDB's own wording, not on driver/connection name alone: precise
+     * enough that this can never swallow a real error (a genuine deadlock,
+     * MySQL's own lock-wait-timeout, or anything else uses a different
+     * SQLSTATE/code/message and is rethrown unchanged).
+     */
+    private function isMariadbSnapshotConflict(QueryException $e): bool
+    {
+        $sqlState = (string) ($e->errorInfo[0] ?? '');
+        $driverCode = $e->errorInfo[1] ?? null;
+        $message = $e->getMessage();
+
+        return $sqlState === 'HY000'
+            && $driverCode === 1020
+            && str_contains($message, 'Record has changed since last read')
+            && str_contains($message, 'try restarting transaction');
     }
 }

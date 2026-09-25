@@ -198,14 +198,30 @@ class PaymentService
     private function findOrCreatePayment(Order $order): Payment
     {
         try {
-            return Payment::create([
+            // Its own savepoint when already inside a transaction (SAVEPOINT
+            // if $this->transactions >= 1, a plain BEGIN/ROLLBACK otherwise —
+            // see Illuminate\Database\Concerns\ManagesTransactions::createTransaction()).
+            // Confirmed on real PostgreSQL 16: without this, a lost race
+            // here left the connection in SQLSTATE 25P02 ("current
+            // transaction is aborted") for the recovery SELECT below,
+            // whenever this ran inside an outer transaction (e.g. under
+            // RefreshDatabase in tests). Mirrors
+            // WalletTransactionService::record()'s savepoint fix exactly.
+            return DB::transaction(fn () => Payment::create([
                 'order_id' => $order->id,
                 'status' => PaymentStatus::Pending,
-            ]);
+            ]));
         } catch (QueryException $e) {
-            // Lost the order_id race (or this is a plain repeat call) —
-            // same "insert, recover on the known unique-constraint race"
-            // pattern used throughout this domain.
+            // Only the unique(order_id) race is recovered here — any other
+            // constraint failure (FK, CHECK, NOT NULL) propagates unchanged.
+            // The savepoint above already rolled this attempt back before
+            // this catch runs, so the recovery SELECT below always sees a
+            // healthy transaction, on every engine including PostgreSQL.
+            if (! $this->isOrderIdUniqueViolation($e)) {
+                throw $e;
+            }
+
+            // Lost the unique(order_id) race (or this is a plain repeat call).
             $payment = Payment::where('order_id', $order->id)->first();
 
             if ($payment === null) {
@@ -214,6 +230,28 @@ class PaymentService
 
             return $payment;
         }
+    }
+
+    /**
+     * Portable across drivers — mirrors
+     * InventoryReservationService::isReservationIdentityViolation()'s
+     * precision exactly. MySQL/MariaDB's SQLSTATE 23000 also covers a
+     * FOREIGN KEY and a NOT NULL violation, not only a unique-key one —
+     * driver code 1062 (ER_DUP_ENTRY) narrows it to the unique case
+     * specifically. SQLite also reports 23000 for every constraint type,
+     * distinguished only by message text ("UNIQUE constraint failed").
+     * PostgreSQL's 23505 is already unique-only by definition.
+     */
+    private function isOrderIdUniqueViolation(QueryException $e): bool
+    {
+        $sqlState = (string) ($e->errorInfo[0] ?? $e->getCode());
+        $driverCode = $e->errorInfo[1] ?? null;
+        $message = $e->getMessage();
+
+        $isUnique = $sqlState === '23505'
+            || ($sqlState === '23000' && ($driverCode === 1062 || str_contains($message, 'UNIQUE constraint failed')));
+
+        return $isUnique && str_contains($message, 'order_id');
     }
 
     /**

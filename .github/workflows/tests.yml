@@ -48,3 +48,111 @@ jobs:
 
       - name: Tests
         run: ./vendor/bin/pest
+
+  real-engine-financial:
+    name: real-engine-financial (${{ matrix.engine }})
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          # database/schema/mysql-schema.sql exists (§3/§11 of
+          # docs/architecture/DATABASE-SUPPORT.md): a fresh MySQL migrate
+          # here proves the baseline path, the actually-supported one.
+          # No password on the healthcheck itself: mysqladmin ping reports
+          # the server alive (exit 0) as soon as it accepts connections,
+          # even on an auth failure — confirmed against a real mysql:8.0
+          # container. Keeps the healthcheck argument free of any password
+          # escaping through the runner's shell -> docker create -> the
+          # container's own shell, which cannot be verified without a real
+          # GitHub Actions runner.
+          - engine: mysql
+            connection: mysql
+            image: mysql:8.0
+            db_port: 3306
+            db_user: root
+            health_cmd: mysqladmin ping
+          # database/schema/mariadb-schema.sql exists — same as MySQL, its
+          # own baseline, generated with mariadb-dump, never reused from
+          # MySQL's. mysqladmin does NOT exist on the mariadb:11 image
+          # (confirmed: exit 127) — healthcheck.sh is that image's own,
+          # documented mechanism.
+          - engine: mariadb
+            connection: mariadb
+            image: mariadb:11
+            db_port: 3306
+            db_user: root
+            health_cmd: healthcheck.sh --connect --innodb_initialized
+          # No pgsql-schema.sql exists, and none is needed: PostgreSQL's
+          # fresh install never blocks (§3/§11) — this migrate proves the
+          # direct-replay path, PostgreSQL's actually-supported one. Do not
+          # add a baseline here just to look uniform with the other two.
+          - engine: pgsql
+            connection: pgsql
+            image: postgres:16
+            db_port: 5432
+            db_user: postgres
+            health_cmd: pg_isready -U postgres
+
+    services:
+      db:
+        image: ${{ matrix.image }}
+        env:
+          MYSQL_ROOT_PASSWORD: ci_disposable_only
+          MYSQL_DATABASE: shoprdam_ci_test
+          MARIADB_ROOT_PASSWORD: ci_disposable_only
+          MARIADB_DATABASE: shoprdam_ci_test
+          POSTGRES_PASSWORD: ci_disposable_only
+          POSTGRES_DB: shoprdam_ci_test
+        ports:
+          - ${{ matrix.db_port }}:${{ matrix.db_port }}
+        options: >-
+          --health-cmd="${{ matrix.health_cmd }}"
+          --health-interval=5s
+          --health-timeout=5s
+          --health-retries=10
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup PHP
+        uses: shivammathur/setup-php@v2
+        with:
+          php-version: 8.4
+          tools: composer:v2
+          extensions: pdo_mysql, mysqli, pdo_pgsql, pgsql, bcmath
+
+      - name: Install Dependencies
+        run: composer install --no-interaction --prefer-dist --optimize-autoloader
+
+      - name: Copy Environment File
+        run: cp .env.example .env
+
+      - name: Generate Application Key
+        run: php artisan key:generate
+
+      - name: Fresh install — proves this engine's actually-supported path
+        env:
+          DB_CONNECTION: ${{ matrix.connection }}
+          DB_HOST: 127.0.0.1
+          DB_PORT: ${{ matrix.db_port }}
+          DB_DATABASE: shoprdam_ci_test
+          DB_USERNAME: ${{ matrix.db_user }}
+          DB_PASSWORD: ci_disposable_only
+        run: php artisan migrate --force
+
+      - name: Real-engine financial suite
+        env:
+          DB_CONNECTION: ${{ matrix.connection }}
+          DB_HOST: 127.0.0.1
+          DB_PORT: ${{ matrix.db_port }}
+          DB_DATABASE: shoprdam_ci_test
+          DB_USERNAME: ${{ matrix.db_user }}
+          DB_PASSWORD: ci_disposable_only
+        run: >
+          php artisan test
+          tests/Feature/Domain/Payments
+          tests/Feature/Domain/Payouts
+          tests/Feature/Domain/Orders
+          tests/Feature/Store

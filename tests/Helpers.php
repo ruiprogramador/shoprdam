@@ -9,9 +9,127 @@ use App\Models\Store;
 use App\Models\StoreWallet;
 use App\Models\StoreWalletTransaction;
 use App\Services\Wallet\WalletTransactionService;
+use Illuminate\Database\QueryException;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Testing\TestResponse;
 use Nnjeim\World\Models\Currency;
+
+/**
+ * Isolates a single operation this test deliberately expects the database
+ * to refuse (a FK/unique/CHECK violation), inside its own savepoint when
+ * already nested in a transaction (SAVEPOINT if $this->transactions >= 1,
+ * a plain BEGIN/ROLLBACK otherwise — see
+ * Illuminate\Database\Concerns\ManagesTransactions::createTransaction()).
+ * On SQLite/MySQL/MariaDB a single failed statement never poisons the rest
+ * of the surrounding transaction anyway, so this is a no-op there; on
+ * PostgreSQL, without it, the expected QueryException would leave the
+ * outer (e.g. RefreshDatabase's) transaction aborted — SQLSTATE 25P02 —
+ * for every assertion the test makes afterward, even though the refusal
+ * itself is correct and expected. The refused operation's own
+ * QueryException still propagates unchanged; assertions made after calling
+ * this run on a healthy connection either way.
+ */
+function expectDatabaseRefusal(Closure $operation): void
+{
+    expect(fn () => DB::transaction($operation))->toThrow(QueryException::class);
+}
+
+/**
+ * Real, migrated-schema foreign-key info for one table, keyed by column
+ * name — e.g. `['user_id' => ['table' => 'users', 'rule' => 'RESTRICT']]`.
+ * Engine-aware: SQLite via `PRAGMA foreign_key_list` (its `on_delete` column
+ * already reads `RESTRICT`/`SET NULL`/`CASCADE`/`NO ACTION`); MySQL/MariaDB
+ * via `information_schema.key_column_usage` (whose `referenced_table_name`
+ * is a first-party MySQL/MariaDB extension) joined to
+ * `referential_constraints` (`delete_rule`); PostgreSQL via the same two
+ * tables plus `constraint_column_usage` (its standard-SQL equivalent of the
+ * referenced side, since PostgreSQL's own `key_column_usage` has no
+ * `referenced_table_name` column) — verified against a real instance of all
+ * three. Used by every `*SchemaDeletePolicyTest` so RESTRICT/SET NULL/CASCADE
+ * policy is checked against the actual, real constraint on whichever engine
+ * the suite is pointed at, not assumed portable from SQLite alone.
+ */
+function dbForeignKeyInfo(string $table): array
+{
+    if (DB::getDriverName() === 'sqlite') {
+        return collect(DB::select("PRAGMA foreign_key_list('{$table}')"))
+            ->mapWithKeys(fn ($row) => [$row->from => ['table' => $row->table, 'rule' => $row->on_delete]])
+            ->all();
+    }
+
+    if (DB::getDriverName() === 'pgsql') {
+        return collect(DB::select(
+            'select kcu.column_name as col, rc.delete_rule as rule, ccu.table_name as ref_table '
+            .'from information_schema.key_column_usage kcu '
+            .'join information_schema.referential_constraints rc '
+            .'  on rc.constraint_name = kcu.constraint_name and rc.constraint_schema = kcu.constraint_schema '
+            .'join information_schema.constraint_column_usage ccu '
+            .'  on ccu.constraint_name = rc.unique_constraint_name and ccu.constraint_schema = rc.unique_constraint_schema '
+            .'where kcu.table_name = ?',
+            [$table],
+        ))->mapWithKeys(fn ($row) => [$row->col => ['table' => $row->ref_table, 'rule' => $row->rule]])->all();
+    }
+
+    // mysql / mariadb
+    return collect(DB::select(
+        'select kcu.column_name as col, rc.delete_rule as rule, kcu.referenced_table_name as ref_table '
+        .'from information_schema.key_column_usage kcu '
+        .'join information_schema.referential_constraints rc '
+        .'  on rc.constraint_name = kcu.constraint_name and rc.constraint_schema = kcu.constraint_schema '
+        .'where kcu.table_name = ? and kcu.table_schema = ?',
+        [$table, DB::getDatabaseName()],
+    ))->mapWithKeys(fn ($row) => [$row->col => ['table' => $row->ref_table, 'rule' => $row->rule]])->all();
+}
+
+/** Same as dbForeignKeyInfo(), but just the delete rule keyed by column. */
+function dbForeignKeyDeleteRules(string $table): array
+{
+    return collect(dbForeignKeyInfo($table))->map(fn ($info) => $info['rule'])->all();
+}
+
+/**
+ * Every UNIQUE (and PRIMARY KEY) column set actually enforced on the real,
+ * migrated table — e.g. `[['id'], ['active_identity']]` for a table with a
+ * single-column PK and a single-column unique index, or `[['a', 'b']]` for
+ * a composite unique constraint. Engine-aware: SQLite via `PRAGMA
+ * index_list`/`index_info`; MySQL/MariaDB via `information_schema.statistics`
+ * (`non_unique = 0`, grouped by index, ordered by `seq_in_index`);
+ * PostgreSQL via `information_schema.table_constraints` joined to
+ * `key_column_usage` (`constraint_type` UNIQUE/PRIMARY KEY) — verified
+ * against a real instance of all three.
+ */
+function dbUniqueColumnSets(string $table): array
+{
+    if (DB::getDriverName() === 'sqlite') {
+        return collect(DB::select("PRAGMA index_list('{$table}')"))
+            ->filter(fn ($index) => (bool) $index->unique)
+            ->map(fn ($index) => collect(DB::select("PRAGMA index_info('{$index->name}')"))->pluck('name')->all())
+            ->values()->all();
+    }
+
+    if (DB::getDriverName() === 'pgsql') {
+        $rows = DB::select(
+            'select tc.constraint_name as idx, kcu.column_name as col '
+            .'from information_schema.table_constraints tc '
+            .'join information_schema.key_column_usage kcu '
+            .'  on kcu.constraint_name = tc.constraint_name and kcu.constraint_schema = tc.constraint_schema '
+            ."where tc.table_name = ? and tc.constraint_type in ('UNIQUE', 'PRIMARY KEY') "
+            .'order by tc.constraint_name, kcu.ordinal_position',
+            [$table],
+        );
+    } else {
+        // mysql / mariadb
+        $rows = DB::select(
+            'select index_name as idx, column_name as col '
+            .'from information_schema.statistics '
+            .'where table_schema = ? and table_name = ? and non_unique = 0 '
+            .'order by index_name, seq_in_index',
+            [DB::getDatabaseName(), $table],
+        );
+    }
+
+    return collect($rows)->groupBy('idx')->map(fn ($group) => $group->pluck('col')->all())->values()->all();
+}
 
 function recordTransaction(
     string $category,

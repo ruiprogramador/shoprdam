@@ -14,6 +14,9 @@ use App\Domain\Payments\Services\ReconciliationFindingRepository;
 use App\Models\Admin;
 use App\Models\Order;
 use App\Models\Store;
+use Illuminate\Database\Events\QueryExecuted;
+use Illuminate\Support\Facades\DB;
+use Illuminate\Support\Facades\Event;
 
 /**
  * Every row of docs/financial/RECONCILIATION.md §10's transition table,
@@ -236,4 +239,65 @@ it('two concurrent observations for the same identity converge on one row via un
     expect(ReconciliationFinding::count())->toBe(1)
         ->and($second->observation_count)->toBe(2)
         ->and($second->category)->toBe(ReconciliationCategory::AmountMismatch);
+});
+
+/**
+ * `harden/database-portability` — the test above only exercises
+ * openOrUpdateEpisode()'s EARLY branch (an episode already exists when
+ * first checked). It never exercises the actual in-transaction race the
+ * report's PostgreSQL audit found unsafe in the OLD implementation: the
+ * early lockForUpdate() SELECT finds nothing, a competitor then commits the
+ * exact same identity, and THIS call's own insertOrIgnore() is the one that
+ * discovers the conflict. This test drives exactly that path with a real
+ * DB::listen()-armed competitor, matching
+ * InventoryReservationServiceTest's own technique for the same class of gap.
+ */
+it('a competitor that commits the same active_identity between the early check and this call\'s own insert converges on the winner, never a second row', function () {
+    $repository = app(ReconciliationFindingRepository::class);
+    $attemptId = reconciliationFixtureAttemptId();
+    $armed = true;
+    $competitorId = null;
+
+    DB::listen(function (QueryExecuted $q) use (&$armed, &$competitorId, $attemptId) {
+        // Fires on openOrUpdateEpisode()'s own early lockForUpdate() SELECT,
+        // which finds nothing — strictly before this call's own
+        // savepoint-protected create() runs — a competitor commits the
+        // exact same identity first. Matches the bare table name, not a
+        // quoted "from ..." clause: SQLite/Postgres quote identifiers with
+        // double quotes, MySQL/MariaDB with backticks — this fires
+        // identically on every engine.
+        if ($armed && str_starts_with($q->sql, 'select') && str_contains($q->sql, 'payment_reconciliation_findings')) {
+            $armed = false;
+
+            $competitorId = ReconciliationFinding::create([
+                'payment_attempt_id' => $attemptId,
+                'provider' => 'stripe',
+                'provider_reference' => 'race_inside_tx',
+                'active_identity' => 'stripe:race_inside_tx',
+                'category' => ReconciliationCategory::RemoteMissing,
+                'severity' => ReconciliationSeverity::High,
+                'status' => ReconciliationStatus::Open,
+                'first_observed_at' => now(),
+                'last_observed_at' => now(),
+                'observation_count' => 1,
+            ])->id;
+        }
+    });
+
+    try {
+        $result = $repository->recordObservation(
+            candidateFor(reference: 'race_inside_tx', attemptId: $attemptId),
+            classificationOf(ReconciliationCategory::AmountMismatch),
+        );
+    } finally {
+        Event::forget(QueryExecuted::class);
+    }
+
+    expect($armed)->toBeFalse()
+        ->and($result->id)->toBe($competitorId)
+        // The competitor's own RemoteMissing observation, merged with — not
+        // replaced by — this call's AmountMismatch one.
+        ->and($result->category)->toBe(ReconciliationCategory::AmountMismatch)
+        ->and($result->observation_count)->toBe(2)
+        ->and(ReconciliationFinding::count())->toBe(1);
 });

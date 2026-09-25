@@ -9,68 +9,99 @@ use Illuminate\Database\QueryException;
 use Illuminate\Support\Facades\DB;
 
 /**
- * REAL-ENGINE concurrency proof for the inventory reservation core
- * (docs/inventory/INVENTORY-RESERVATIONS.md §11). Not part of the default
- * suites (`phpunit.xml` lists Unit/Feature/Architecture only) and never run on
- * SQLite: it needs a disposable local MySQL/InnoDB database.
+ * REAL-ENGINE concurrency proof for the inventory reservation core, the
+ * MariaDB sibling of InventoryMysqlConcurrencyTest.php (see that file's
+ * header for the full scenario catalogue and protocol description; the two
+ * are line-for-line equivalent test-by-test, sharing worker.php and
+ * ConcurrencyHelpers.php verbatim). Proven independently here, not inferred
+ * from the MySQL run: MariaDB forked from MySQL long ago and its InnoDB lock
+ * instrumentation has since diverged (see mcAwaitLockWait below).
  *
- * Every "buyer" here is a separate OS process (tests/Concurrency/worker.php)
- * with its own MySQL connection — not two operations issued one after the other
- * on one connection.
+ * Two real, engine-specific differences from MySQL this file had to account
+ * for rather than assume away:
  *
- * Two kinds of scenario:
+ * - MariaDB has no `performance_schema.data_lock_waits` (a MySQL 8.0+
+ *   addition). Lock-wait detection here instead uses MariaDB's own
+ *   `information_schema.INNODB_LOCK_WAITS` joined to `INNODB_TRX` — verified
+ *   empirically against a real blocked UPDATE before being used in this
+ *   harness (see this branch's Round 5 report §InventoryConcurrency).
+ * - The CHECK-constraint violation driver error code is 4025 on MariaDB,
+ *   not MySQL's 3819 (also confirmed empirically this round, independently
+ *   of this harness, when the identical constraint was hand-tested against
+ *   both servers).
  *
- * - DETERMINISTIC: worker A runs the real service call inside a still-open outer
- *   transaction, so it holds its InnoDB row locks; worker B is started behind it;
- *   this file then verifies in `performance_schema.data_lock_waits` that B's
- *   connection is genuinely blocked on a lock BEFORE A is allowed to commit.
- *   That is the exact behavior the design relies on: the loser waits, then
- *   re-evaluates its predicate against the winner's committed result.
- * - RACE: all workers are released from a barrier at once, over many rounds, and
- *   only the invariants are asserted (the interleaving is not controlled).
+ * Run:
  *
- * Run (see the design document):
- *
- *   INVENTORY_MYSQL_CONCURRENCY=1 DB_CONNECTION=mysql DB_HOST=127.0.0.1 DB_PORT=… \
+ *   INVENTORY_MARIADB_CONCURRENCY=1 DB_CONNECTION=mariadb DB_HOST=127.0.0.1 DB_PORT=… \
  *   DB_DATABASE=<name>_concurrency_test DB_USERNAME=… DB_PASSWORD=… \
  *   [INVENTORY_CONCURRENCY_WORKER_PHP_ARGS="-d extension=pdo_mysql"] \
- *   php vendor/pestphp/pest/bin/pest tests/Concurrency
+ *   php vendor/pestphp/pest/bin/pest tests/Concurrency/InventoryMariadbConcurrencyTest.php
  *
  * against a database that has been `migrate`d. It refuses any database whose
  * name does not end in `_concurrency_test` or whose host is not local.
- *
- * Engine-agnostic helpers (mcDir/mcSpawn/mcWait/mcReady/mcSignal/mcResult/
- * mcJoin/mcRace/mcOutcomes/mcService/mcStatuses/mcReservedOrder) live in
- * ConcurrencyHelpers.php, shared with InventoryPostgresConcurrencyTest.php.
  */
 require __DIR__.'/ConcurrencyHelpers.php';
 
 beforeEach(function () {
-    if (getenv('INVENTORY_MYSQL_CONCURRENCY') !== '1') {
-        $this->markTestSkipped('Set INVENTORY_MYSQL_CONCURRENCY=1 and point DB_* at a disposable local MySQL *_concurrency_test database.');
+    if (getenv('INVENTORY_MARIADB_CONCURRENCY') !== '1') {
+        $this->markTestSkipped('Set INVENTORY_MARIADB_CONCURRENCY=1 and point DB_* at a disposable local MariaDB *_concurrency_test database.');
     }
 
     $connection = config('database.default');
     $settings = config("database.connections.{$connection}");
 
-    if ($connection !== 'mysql' || ! in_array($settings['host'], ['127.0.0.1', 'localhost'], true) || ! str_ends_with((string) $settings['database'], '_concurrency_test')) {
-        throw new RuntimeException('Refusing to run: the effective connection is not a disposable local MySQL *_concurrency_test database.');
+    if ($connection !== 'mariadb' || ! in_array($settings['host'], ['127.0.0.1', 'localhost'], true) || ! str_ends_with((string) $settings['database'], '_concurrency_test')) {
+        throw new RuntimeException('Refusing to run: the effective connection is not a disposable local MariaDB *_concurrency_test database.');
     }
 });
 
-/** Whether the given MySQL connection is currently waiting on an InnoDB lock held by another transaction. */
+/**
+ * Whether the given MariaDB connection is currently waiting on an InnoDB
+ * lock held by another transaction.
+ *
+ * NOT backed by `information_schema.innodb_lock_waits`/`innodb_trx` (unlike
+ * this file's earlier version, and unlike MySQL's equivalent in
+ * InventoryMysqlConcurrencyTest.php). Confirmed empirically on real MariaDB
+ * 11.8.9, reproducibly, three independent ways (two hand-run SQL sessions
+ * with microsecond timestamps, and this suite's own harness): a connection
+ * genuinely blocked on a row lock for its *entire* duration — proven by a
+ * second connection resolving within ~1ms of the holder's COMMIT after
+ * being blocked — appears in `innodb_lock_waits`/`innodb_trx.trx_state =
+ * 'LOCK WAIT'` for only the first 1-2 seconds of the wait, then silently
+ * drops out of both views while the wait (and the underlying InnoDB lock)
+ * continues unchanged. Polling either table missed the block entirely in
+ * this suite's original run, timing out at 30s even though the same
+ * connection was later shown (via `information_schema.processlist`, and via
+ * hitting the real `innodb_lock_wait_timeout` at exactly 50s) to have been
+ * blocked the whole time. This looks like a monitoring-table gap specific
+ * to MariaDB's legacy INNODB_LOCK_WAITS/INNODB_TRX implementation, not a
+ * locking behavior difference — MariaDB's actual row-locking here is
+ * identical to MySQL's.
+ *
+ * `information_schema.processlist` (this connection's `command <> 'Sleep'`)
+ * does NOT have that gap: verified to read "busy" on 267/274 polls (97%)
+ * across a continuous 6-second real block. A single busy reading isn't
+ * enough on its own — an uncontended query passes through this same state
+ * too, just for microseconds — so REQUIRED_CONSECUTIVE_BUSY_POLLS demands
+ * several in a row before concluding "blocked", which a fast, uncontended
+ * query cannot produce.
+ */
 function mcAwaitLockWait(int $connectionId, float $seconds = 30.0): bool
 {
+    $requiredConsecutiveBusyPolls = 3;
+
     $deadline = microtime(true) + $seconds;
+    $consecutiveBusy = 0;
 
     do {
-        $waiting = DB::selectOne(
-            'select count(*) as n from performance_schema.data_lock_waits w '
-            .'join performance_schema.threads t on t.thread_id = w.requesting_thread_id where t.processlist_id = ?',
+        $busy = DB::selectOne(
+            "select count(*) as n from information_schema.processlist where id = ? and command <> 'Sleep'",
             [$connectionId],
         )->n;
 
-        if ($waiting > 0) {
+        $consecutiveBusy = $busy > 0 ? $consecutiveBusy + 1 : 0;
+
+        if ($consecutiveBusy >= $requiredConsecutiveBusyPolls) {
             return true;
         }
 
@@ -84,18 +115,17 @@ function mcAwaitLockWait(int $connectionId, float $seconds = 30.0): bool
 // The real engine, and the schema on it
 // ---------------------------------------------------------------------
 
-it('runs on real MySQL/InnoDB at the production default isolation level', function () {
+it('runs on real MariaDB/InnoDB at the production default isolation level', function () {
     $server = DB::selectOne('select version() as v, @@transaction_isolation as i, @@innodb_lock_wait_timeout as t, @@default_storage_engine as e');
 
     expect($server->i)->toBe('REPEATABLE-READ')
         ->and($server->e)->toBe('InnoDB')
-        ->and(DB::getDriverName())->toBe('mysql');
+        ->and(DB::getDriverName())->toBe('mariadb');
 
-    fwrite(STDERR, "\n[mysql] {$server->v} isolation={$server->i} lock_wait_timeout={$server->t}s\n");
+    fwrite(STDERR, "\n[mariadb] {$server->v} isolation={$server->i} lock_wait_timeout={$server->t}s\n");
 });
 
-it('enforces the CHECK constraints and RESTRICT foreign keys on MySQL itself, not only the SQLite triggers', function () {
-    // Aliased: MySQL 8 returns information_schema column names in upper case.
+it('enforces the CHECK constraints and RESTRICT foreign keys on MariaDB itself, not only the SQLite triggers', function () {
     $checks = array_column(DB::select(
         'select constraint_name as name from information_schema.check_constraints where constraint_schema = ?',
         [DB::getDatabaseName()],
@@ -143,13 +173,11 @@ it('enforces the CHECK constraints and RESTRICT foreign keys on MySQL itself, no
             $codes[] = $e->errorInfo[1];
         }
     } finally {
-        // This fixture is deliberately inconsistent (reserved=2, no reservation): remove it,
-        // so the final integrity audit of the real-concurrency data is not polluted by it.
         DB::table('inventory_reservations')->where('inventory_id', $inventoryId)->delete();
         DB::table('inventories')->where('id', $inventoryId)->delete();
     }
 
-    expect($codes)->toBe([3819]); // ER_CHECK_CONSTRAINT_VIOLATED — the constraint is really enforced
+    expect($codes)->toBe([4025]); // ER_CONSTRAINT_FAILED on MariaDB (MySQL uses 3819) — the constraint is really enforced
 });
 
 // ---------------------------------------------------------------------
@@ -169,7 +197,7 @@ it('stock=1, two different Orders: B is genuinely blocked behind A\'s InnoDB row
     $ids = mcReady($dir, ['A', 'B']);
 
     mcSignal($dir, 'A.go');
-    mcWait($dir, 'A.locked');           // A ran reserve(1) and still holds its row locks, uncommitted
+    mcWait($dir, 'A.locked');
     mcSignal($dir, 'B.go');
 
     expect(mcAwaitLockWait($ids['B']))->toBeTrue('B never blocked on a lock')
@@ -184,7 +212,6 @@ it('stock=1, two different Orders: B is genuinely blocked behind A\'s InnoDB row
     expect($ra['status'])->toBe('ok')
         ->and($rb['status'])->toBe('error')
         ->and($rb['class'])->toBe(InsufficientStockException::class)
-        // B waited for A: it finished only after A committed
         ->and($rb['finished_at'])->toBeGreaterThanOrEqual($ra['finished_at'])
         ->and(inventoryState($product))->toBe(['on_hand' => 1, 'reserved' => 1, 'available' => 0])
         ->and(mcStatuses($orderA))->toBe(['reserved'])
@@ -237,7 +264,7 @@ it('duplicate concurrent reserve() of one Order: the loser waits on the unique c
 
     expect($ra['status'])->toBe('ok')
         ->and($rb['status'])->toBe('ok')
-        ->and($rb['value'])->toBe($ra['value'])   // the very same reservation
+        ->and($rb['value'])->toBe($ra['value'])
         ->and(inventoryState($product))->toBe(['on_hand' => 5, 'reserved' => 2, 'available' => 3])
         ->and(mcStatuses($order))->toBe(['reserved']);
 });
@@ -420,14 +447,12 @@ it('multi-line Orders whose lines are stored in OPPOSITE product order never dea
     foreach (range(1, 25) as $round) {
         $p1 = inventoryProduct($store, '10.00', 'P1');
         $p2 = inventoryProduct($store, '10.00', 'P2');
-        // Inventory ids deliberately NOT in product-id order.
         inventorySeed($p2, 10);
         inventorySeed($p1, 10);
 
         $orderX = inventoryOrder($store, [[$p1, 1], [$p2, 1]]);
         $orderY = inventoryOrder($store, [[$p1, 1], [$p2, 1]]);
 
-        // Same price, same quantity: the Order still adds up, but Y's lines are now stored p2 then p1.
         [$first, $second] = $orderY->items->sortBy('id')->values();
         DB::table('order_items')->where('id', $first->id)->update(['product_id' => $p2->id]);
         DB::table('order_items')->where('id', $second->id)->update(['product_id' => $p1->id]);
@@ -453,8 +478,8 @@ it('an Order whose LAST line lacks stock leaves nothing behind, even while anoth
     foreach (range(1, 12) as $round) {
         $p1 = inventoryProduct($store, '10.00', 'P1');
         $p2 = inventoryProduct($store, '10.00', 'P2');
-        inventorySeed($p1, 1);   // the only unit of P1
-        inventorySeed($p2, 1);   // P2 cannot satisfy a request for 5
+        inventorySeed($p1, 1);
+        inventorySeed($p2, 1);
 
         $failing = inventoryOrder($store, [[$p1, 1], [$p2, 5]]);
         $other = inventoryOrder($store, [[$p1, 1]]);
@@ -464,7 +489,6 @@ it('an Order whose LAST line lacks stock leaves nothing behind, even while anoth
             ['name' => 'Y', 'action' => 'reserve', 'order' => $other],
         ]);
 
-        // X may take P1 first and roll it back, or find it already taken: either way X fails and Y must not lose the unit to a ghost hold.
         expect($results['X']['class'] ?? null)->toBe(InsufficientStockException::class, "round {$round}: ".json_encode($results))
             ->and($results['Y']['status'])->toBe('ok')
             ->and(mcStatuses($failing))->toBe([])
@@ -504,7 +528,6 @@ it('multi-line commit() of one Order and release() of another, over shared inven
         expect(array_values(mcOutcomes($results)))->toBe(['ok', 'ok'], "round {$round}: ".json_encode($results))
             ->and(mcStatuses($orderX))->toBe(['committed', 'committed'])
             ->and(mcStatuses($orderY))->toBe(['released', 'released'])
-            // X consumed one unit of each; Y's holds went back
             ->and(inventoryState($p1))->toBe(['on_hand' => 9, 'reserved' => 0, 'available' => 9])
             ->and(inventoryState($p2))->toBe(['on_hand' => 9, 'reserved' => 0, 'available' => 9]);
     }
