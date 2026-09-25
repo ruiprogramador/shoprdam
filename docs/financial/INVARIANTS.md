@@ -299,6 +299,8 @@ listed once here rather than repeated per row:
 | Structural boundary | Architecture test |
 |---|---|
 | Wallet single writer | `tests/Architecture/WalletLedgerSingleWriterTest` |
+| Only the canonical financial services (`PaymentService`, `PaymentEventProcessor`, `PayoutService`) call the Wallet writer | `tests/Architecture/WalletLedgerCanonicalCallerTest` |
+| No float in money-bearing code | `tests/Architecture/MoneyNoFloatTest` |
 | Wallet opening balance always zero | `tests/Feature/Store/WalletServiceOpeningBalanceTest` (feature, not architecture — DB-backed) |
 | `wallet:audit`/`WalletLedgerAuditor` are read-only | `tests/Architecture/WalletLedgerReadOnlyAuditTest` |
 | No direct Wallet mutation from Payments admin/recovery | `tests/Architecture/PaymentRecoveryNoDirectWalletMutationTest` |
@@ -312,4 +314,4 @@ listed once here rather than repeated per row:
 | The CROSS-14 hardening migration is safe against a database already holding real financial history | `tests/Feature/Domain/Payments/FinancialHistoryCascadeMigrationSafetyTest` |
 | `ProfileController::destroy()` blocks account deletion for any Store owner before any mutation | `tests/Feature/ProfileAccountDeletionFinancialHistoryTest` |
 | Only the canonical lifecycle service writes an Order's status; only `PaymentEventProcessor` calls a transition; the Orders domain has no Payments/Wallet-write dependency | `tests/Architecture/OrderLifecycleBoundaryTest` |
-| This registry itself stays complete | `tests/Architecture/FinancialContractRegistryTest` (new, see below) |
+| This registry itself stays complete | `tests/Architecture/FinancialContractRegistryTest` |

@@ -74,10 +74,11 @@ function something()
 |--------------------------------------------------------------------------
 |
 | tests/Concurrency is NOT part of any phpunit.xml suite. It needs a
-| disposable local MySQL *_concurrency_test database with real commits, so it
-| deliberately does not use RefreshDatabase (a wrapping transaction would hide
-| every write from the other connections). See
-| tests/Concurrency/InventoryMysqlConcurrencyTest.php.
+| disposable local MySQL, MariaDB or PostgreSQL *_concurrency_test database
+| (one opt-in flag per engine) with real commits, so it deliberately does not
+| use RefreshDatabase (a wrapping transaction would hide every write from the
+| other connections). See tests/Concurrency/InventoryMysqlConcurrencyTest.php,
+| InventoryMariadbConcurrencyTest.php and InventoryPostgresConcurrencyTest.php.
 |
 */
 

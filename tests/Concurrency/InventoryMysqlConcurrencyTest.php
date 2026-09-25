@@ -41,7 +41,8 @@ use Illuminate\Support\Facades\DB;
  *
  * Engine-agnostic helpers (mcDir/mcSpawn/mcWait/mcReady/mcSignal/mcResult/
  * mcJoin/mcRace/mcOutcomes/mcService/mcStatuses/mcReservedOrder) live in
- * ConcurrencyHelpers.php, shared with InventoryPostgresConcurrencyTest.php.
+ * ConcurrencyHelpers.php, shared with InventoryMariadbConcurrencyTest.php and
+ * InventoryPostgresConcurrencyTest.php.
  */
 require __DIR__.'/ConcurrencyHelpers.php';
 
