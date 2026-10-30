@@ -95,6 +95,8 @@ on_hand_quantity   = initial − Σ quantity of reservations with status 'commit
 0 ≤ reserved_quantity ≤ on_hand_quantity
 ```
 
+The second line holds **only in the current implementation**, where `commit` is the only operation that changes `on_hand_quantity` and `initial` is whatever a raw seed wrote (§10). It is not a universal law of the domain. `docs/inventory/INVENTORY-CONTROL.md` (design only, not implemented) proposes receipts, write-offs, corrections and counts, which make `on_hand` move otherwise. That document replaces this line with a baseline-plus-movements equation (its §15). The first and third lines are unaffected.
+
 The last line is a **database CHECK** (§5), and `reserve` cannot produce a violation because of the predicate (§7). `InventoryIntegrityCheckerTest` runs a 120-step deterministic sequence of reserve/commit/release checking every equation after every step.
 
 ## 4. Schema
@@ -204,7 +206,7 @@ Rename, reprice, re-currency, deactivate and soft-delete change nothing about a 
 
 ## 10. Stock creation and adjustment
 
-**There is no production path that creates or changes physical stock**, and no `setStock`. Tests seed stock with a raw insert (`tests/Helpers.php::inventorySeed`). Production creation/adjustment (receiving, write-offs, "may an operator drop stock below what is reserved?") needs product decisions and an audit ledger; it is future work (§18). Consequently the service can never *increase* `on_hand`; `release` only lowers `reserved`.
+**There is no production path that creates or changes physical stock**, and no `setStock`. Tests seed stock with a raw insert (`tests/Helpers.php::inventorySeed`). Production creation/adjustment (receiving, write-offs, "may an operator drop stock below what is reserved?") needs product decisions and an audit ledger; it is future work (§18). Consequently the service can never *increase* `on_hand`; `release` only lowers `reserved`. That future capability is now designed, **not implemented**, in `docs/inventory/INVENTORY-CONTROL.md`: Inventory creation at 0/0, receipts, write-offs, corrections, physical counts and legacy adoption, each with append-only evidence.
 
 ## 11. Concurrency guarantee: what is proven, on which engine
 
@@ -326,7 +328,7 @@ All FKs RESTRICT (`InventoryReservationServiceTest` "Q" reads the actual `PRAGMA
 
 ## 16. Drift detection (INVENTORY-20)
 
-`InventoryIntegrityChecker::audit()` — read-only, chunked, no lock, **never repairs**. Findings: `negative_on_hand`, `negative_reserved`, `reserved_exceeds_on_hand`, `counter_disagrees_with_reservations` (covers a raw counter edit, a raw reservation delete, a terminal reservation still counted, a live one not counted), `unknown_status`, `order_item_missing`, `quantity_mismatch`, `inventory_product_mismatch`. It **cannot** verify `on_hand_quantity` against history: there is no stock ledger, so physical stock is taken as authoritative. Nothing calls it automatically and no command was added. Duplicate logical reservations are prevented by the unique index, so they are not a finding.
+`InventoryIntegrityChecker::audit()` — read-only, chunked, no lock, **never repairs**. Findings: `negative_on_hand`, `negative_reserved`, `reserved_exceeds_on_hand`, `counter_disagrees_with_reservations` (covers a raw counter edit, a raw reservation delete, a terminal reservation still counted, a live one not counted), `unknown_status`, `order_item_missing`, `quantity_mismatch`, `inventory_product_mismatch`. It **cannot** verify `on_hand_quantity` against history: there is no stock ledger, so physical stock is taken as authoritative. (The proposed evidence model and checker extension are in `docs/inventory/INVENTORY-CONTROL.md` §15; design only.) Nothing calls it automatically and no command was added. Duplicate logical reservations are prevented by the unique index, so they are not a finding.
 
 Fail-closed at operation time: `reserve` refuses a mismatching existing reservation or a tampered Order; `commit`/`release` refuse a reservation whose quantity/Inventory disagrees with its OrderItem and any transition the counters cannot absorb. **Not preventable:** a raw write that *lowers* `reserved_quantity` makes more stock look available to `reserve` — it can only be detected afterwards.
 
@@ -437,7 +439,7 @@ Expiry-CAS probe: N/A (no expiry).
 3. **No expiry / release trigger**: reservations live until explicitly committed or released, so a future checkout could hoard stock — bounded only once the §12 decision exists.
 4. **No payment commit integration**; a paid Order can have a `reserved` reservation indefinitely (detectable: paid line-backed Order + `reserved` row).
 5. **Late payment after release** is unresolved (§12).
-6. **`on_hand_quantity` is trusted, not verified.** `InventoryIntegrityChecker` checks the *internal consistency of persisted state* (counters vs reservation rows vs OrderItems). It **cannot** prove that `on_hand_quantity` equals the quantity that physically exists, and there is no stock ledger to reconstruct it from. Stock creation, receipts, adjustments, stocktakes/cycle counts and physical reconciliation belong to a future *inventory-control* capability, deliberately **not** part of inventory reservations, and nothing for them was created here (no tables, no code).
+6. **`on_hand_quantity` is trusted, not verified.** `InventoryIntegrityChecker` checks the *internal consistency of persisted state* (counters vs reservation rows vs OrderItems). It **cannot** prove that `on_hand_quantity` equals the quantity that physically exists, and there is no stock ledger to reconstruct it from. Stock creation, receipts, adjustments, stocktakes/cycle counts and physical reconciliation belong to a future *inventory-control* capability, deliberately **not** part of inventory reservations, and nothing for them was created here (no tables, no code). Its design contract is `docs/inventory/INVENTORY-CONTROL.md` (PROPOSED, not implemented).
 7. Raw SQL can flip a terminal status, delete a reservation, or lower `reserved_quantity`; detected by the checker, which nothing runs automatically.
 8. Deadlocks/lock timeouts/serialization failures surface as exceptions and are not auto-retried.
 9. The unique-race retry may fail closed inside a caller-owned REPEATABLE READ transaction.
@@ -449,7 +451,7 @@ Expiry-CAS probe: N/A (no expiry).
 
 * what a paid Order with no stock means (§12) — then expiry duration, config (strict integer parsing per `ConfigInteger`), worker, and the release/commit wiring;
 * the checkout contract (who reserves, when, with which composition);
-* how stock is created/adjusted, with a ledger, and whether it may drop below reserved;
+* how stock is created/adjusted, with a ledger, and whether it may drop below reserved — designed, not implemented, in `docs/inventory/INVENTORY-CONTROL.md` (a count below reserved changes nothing and is kept as a discrepancy; counting is not to be activated until the selling policy for an open discrepancy is decided; write-offs consume only available stock). None of that design changes the reserve guard;
 * cancellation must use `release()`, never a new stock path;
 
 ## 23. Non-goals confirmed absent
