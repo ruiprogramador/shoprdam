@@ -20,6 +20,7 @@ why) and resolve it deliberately.
 | Order lifecycle, order items | `docs/financial/ORDER-LIFECYCLE.md`, `docs/orders/ORDER-ITEMS.md` |
 | Catalog | `docs/catalog/CATALOG-DOMAIN.md` |
 | Inventory reservations (`INVENTORY-`) | `docs/inventory/INVENTORY-RESERVATIONS.md` |
+| Inventory control — stock movements, receipts, write-offs, corrections, physical counts, legacy adoption (`STOCK-`); **design only, not implemented** | `docs/inventory/INVENTORY-CONTROL.md` |
 | Wallet operations, payment-provider integration | `docs/wallet/` |
 | Database engines: support status, real-engine evidence, schema baselines (`DBPORT-`) | `docs/architecture/DATABASE-SUPPORT.md` |
 
