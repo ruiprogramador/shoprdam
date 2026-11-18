@@ -26,6 +26,31 @@ class InventoryIntegrityException extends RuntimeException
         return new self("Inventory #{$inventoryId} counters cannot absorb the transition of reservation #{$reservationId}; counters have drifted from the reservation rows.");
     }
 
+    public static function inventoryVanished(int $inventoryId): self
+    {
+        return new self("Inventory #{$inventoryId} no longer exists.");
+    }
+
+    public static function duplicateSaleEvidence(int $reservationId, int $inventoryId): self
+    {
+        return new self("Inventory #{$inventoryId} already has sale evidence for reservation #{$reservationId}, which has just been committed; its status must have been rewritten.");
+    }
+
+    public static function countCasFailedUnderLock(int $inventoryId): self
+    {
+        return new self("Inventory #{$inventoryId} no longer matches the locked row that decided this count.");
+    }
+
+    public static function baselineFlagCasFailedUnderLock(int $inventoryId): self
+    {
+        return new self("Inventory #{$inventoryId} could not be marked as baselined under its own lock.");
+    }
+
+    public static function baselineFlagMismatch(int $inventoryId): self
+    {
+        return new self("Inventory #{$inventoryId}: is_baselined and its baseline row disagree.");
+    }
+
     public static function unknownStatus(int $reservationId, mixed $status): self
     {
         $printable = is_scalar($status) ? (string) $status : get_debug_type($status);

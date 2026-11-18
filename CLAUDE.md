@@ -20,7 +20,7 @@ why) and resolve it deliberately.
 | Order lifecycle, order items | `docs/financial/ORDER-LIFECYCLE.md`, `docs/orders/ORDER-ITEMS.md` |
 | Catalog | `docs/catalog/CATALOG-DOMAIN.md` |
 | Inventory reservations (`INVENTORY-`) | `docs/inventory/INVENTORY-RESERVATIONS.md` |
-| Inventory control — stock movements, receipts, write-offs, corrections, physical counts, legacy adoption (`STOCK-`); **design only, not implemented** | `docs/inventory/INVENTORY-CONTROL.md` |
+| Inventory control: stock movements, receipts, write-offs, corrections, physical counts, legacy adoption (`STOCK-`) | `docs/inventory/INVENTORY-CONTROL.md` |
 | Wallet operations, payment-provider integration | `docs/wallet/` |
 | Database engines: support status, real-engine evidence, schema baselines (`DBPORT-`) | `docs/architecture/DATABASE-SUPPORT.md` |
 
@@ -109,6 +109,11 @@ is stated explicitly in the PR — never resolved silently.
   PostgreSQL's aborted-transaction state is rolled back before any recovery
   query; the `catch` then recovers only the specific, classified case and
   rethrows everything else.
+- A concurrency error raised inside a nested `DB::transaction()` must leave the
+  outer transaction. Laravel turns deadlocks, MySQL/MariaDB lock-wait timeouts and
+  similar into a `DeadlockException` with no savepoint rollback, so catching one and
+  committing persists whatever was already written
+  (`docs/inventory/INVENTORY-CONTROL.md` §24.7).
 - Database-error classifiers are narrow and semantic: SQLSTATE plus driver code
   and/or the specific constraint or column, per engine (MySQL/MariaDB `23000`
   also covers foreign-key and NOT NULL violations). Never widen a classifier or
@@ -134,17 +139,39 @@ Mechanism, state machine and invariant registry:
 - `reserved_quantity` always equals the sum of live reservations and moves only
   together with a reservation transition. Drift is detected
   (`InventoryIntegrityChecker`), never repaired automatically.
-- `InventoryReservationService` is the only writer. Wiring any production caller
-  (checkout, payment, expiry, cancellation, operator action) is a product
-  decision: it must first resolve the open questions the Inventory document
-  records, and must change the caller allowlist in
-  `tests/Architecture/InventoryBoundaryTest.php` on purpose.
+- `inventories.on_hand_quantity` is authoritative; `inventory_movements` is its
+  mandatory, append-only evidence, never a source to sum for availability.
+  `InventoryMovementWriter` is the only code that changes `on_hand_quantity` or
+  inserts a movement, always both in one transaction. A wrong movement is
+  compensated by a new row, never edited or deleted.
+- Each inventory table has one canonical owner: reservations belong to
+  `InventoryReservationService`, baselines and Inventory creation to
+  `InventoryControlService`, counts to `InventoryCountService`. There is no
+  `setStock` and no generic adjustment: every change of stock is a named
+  operation with its own guard.
+- Lock the Inventory row before writing any child row, and take every decision
+  from that locking read or from a conditional `UPDATE`, never from a plain read:
+  a child's foreign key takes a shared lock on its parent, which deadlocks on
+  InnoDB if the exclusive lock comes second.
+- Wiring any production caller (checkout, payment, expiry, cancellation,
+  operator action) is a product decision: it must first resolve the open
+  questions the Inventory documents record, and must change the caller allowlist
+  in `tests/Architecture/InventoryBoundaryTest.php` on purpose. It is also blocked
+  until composing `reserve`, `commit` and `release` in a caller's transaction has a
+  strategy a real-engine test can verify: today a caller that swallows a
+  concurrency error and commits can persist part of an Order on MySQL and MariaDB.
+  Letting those errors escape and rolling back is mandatory for every future
+  caller, and that rule alone is not a technical guarantee
+  (`docs/inventory/INVENTORY-CONTROL.md` §24.7, STOCK-23). Physical counting
+  has its own empty allowlist: `InventoryCountService` gets no production caller
+  until the decisions that document names are made.
 - Never bypass or weaken the locks, CAS, constraints or lock order to simplify a
   test or to gain portability. SQLite results say nothing about Inventory
   concurrency on a server engine (§7).
-- Do not add stock movements, receipts, adjustments, breakage, physical counts
-  or stock-control policies incrementally. They belong to a separate, future
-  inventory-control design.
+- Do not add a stock reason, an operation or a stock-control policy outside the
+  contract in `docs/inventory/INVENTORY-CONTROL.md`. Returns, restock and selling
+  while a discrepancy is open are open decisions recorded there, not gaps to
+  fill.
 
 ## 6. Migrations and schema history
 
@@ -286,6 +313,7 @@ infrastructure.**
 | Financial history is never cascade-deleted | `tests/Architecture/FinancialHistoryDeletePolicyTest.php`, `tests/Architecture/PayoutFinancialHistoryAppendOnlyTest.php` |
 | Domains never import provider SDKs or adapters | `tests/Architecture/PaymentsDomainBoundaryTest.php`, `tests/Architecture/PayoutsDomainBoundaryTest.php` |
 | Order, OrderItem, Catalog and Inventory boundaries | `tests/Architecture/OrderLifecycleBoundaryTest.php`, `tests/Architecture/OrderItemBoundaryTest.php`, `tests/Architecture/CatalogDomainBoundaryTest.php`, `tests/Architecture/InventoryBoundaryTest.php` |
+| Only `InventoryMovementWriter` changes `on_hand_quantity`; physical counting has no production caller | `tests/Architecture/InventoryBoundaryTest.php` |
 | Established migrations are immutable | `tests/Architecture/EstablishedMigrationImmutabilityTest.php` |
 | Migration identifiers fit engine limits | `tests/Architecture/DatabaseMigrationPortabilityTest.php` |
 | The invariant registry keeps its IDs and known limitations | `tests/Architecture/FinancialContractRegistryTest.php` |

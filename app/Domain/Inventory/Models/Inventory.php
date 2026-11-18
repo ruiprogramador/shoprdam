@@ -7,6 +7,7 @@ use Illuminate\Database\Eloquent\Builder;
 use Illuminate\Database\Eloquent\Model;
 use Illuminate\Database\Eloquent\Relations\BelongsTo;
 use Illuminate\Database\Eloquent\Relations\HasMany;
+use Illuminate\Database\Eloquent\Relations\HasOne;
 use LogicException;
 
 /**
@@ -16,8 +17,9 @@ use LogicException;
  * (`available()`), never stored.
  *
  * Every write to `inventories` goes through the atomic, conditional
- * statements in App\Domain\Inventory\Services\InventoryReservationService via
- * the query builder. This model therefore refuses every Eloquent INSTANCE
+ * statements of the canonical inventory services
+ * (docs/inventory/INVENTORY-CONTROL.md §13), never through a model instance.
+ * This model therefore refuses every Eloquent INSTANCE
  * write path outright (`performInsert`/`performUpdate`/`performDeleteOnModel`
  * and `incrementOrDecrement`), so no `save()`, `update()`, `increment()`,
  * `decrement()` or `delete()` on an instance can read a stale number and write
@@ -37,6 +39,7 @@ class Inventory extends Model
     protected $casts = [
         'on_hand_quantity' => 'integer',
         'reserved_quantity' => 'integer',
+        'is_baselined' => 'boolean',
     ];
 
     /** Derived, never stored: units that may still be reserved. */
@@ -78,5 +81,20 @@ class Inventory extends Model
     public function reservations(): HasMany
     {
         return $this->hasMany(InventoryReservation::class);
+    }
+
+    public function movements(): HasMany
+    {
+        return $this->hasMany(InventoryMovement::class);
+    }
+
+    public function counts(): HasMany
+    {
+        return $this->hasMany(InventoryCount::class);
+    }
+
+    public function baseline(): HasOne
+    {
+        return $this->hasOne(InventoryBaseline::class);
     }
 }

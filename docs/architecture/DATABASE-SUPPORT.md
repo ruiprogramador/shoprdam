@@ -10,7 +10,7 @@ document says so instead of implying it.
 | Declared production engine (`README.md`) | **MySQL** |
 | Genuinely SUPPORTED today, under this document's own strict terminology | **MySQL, MariaDB, PostgreSQL** — see §2. All three passed every gate this document defines, against real server instances, not reasoned or inferred from one another. |
 | CONFIGURABLE (connection exists in `config/database.php`) | mysql, mariadb, pgsql, sqlsrv, sqlite |
-| Real-engine concurrency proof | MySQL 8.0.44, MariaDB 11.8.9, PostgreSQL 16.15 — all three, independent-OS-process, for the Inventory domain (`tests/Concurrency`) |
+| Real-engine concurrency proof | MySQL 8.0.44, MariaDB 11.8.9, PostgreSQL 16.15 — all three, independent-OS-process, for the Inventory domain, reservations and control (`tests/Concurrency`, 67 scenarios each, §6) |
 | Real-engine financial-suite proof | All three — `tests/Feature/Domain/{Payments,Payouts,Orders}` + `tests/Feature/Store`, 399/399 on each |
 | Fresh install | MySQL/MariaDB: blocked without a baseline (§3); **proven via baseline**. PostgreSQL: **proven directly**, no baseline needed (§3, §11) |
 | Defects found and fixed *this round*, by real-engine proof alone | 3 — MariaDB's `innodb_snapshot_isolation` signal (§6), MariaDB's volatile lock-wait probe (§6), and a PostgreSQL transaction-abort gap in two sites the previous round's reasoning had cleared (§5) |
@@ -46,7 +46,7 @@ result was extrapolated from a different engine.
 | SCHEMA-COMPATIBLE | **YES** — via baseline (`database/schema/mysql-schema.sql`), proven: empty DB → `migrate` → "Nothing to migrate", 46 tables | **YES** — via baseline (`mariadb-schema.sql`), proven identically | **YES** — via a direct migration replay, proven fresh this round: no baseline exists or is needed (§3, §11) | YES (proven — every default-suite test migrates it) | YES (compiled clean, analysis only — not a target) |
 | FUNCTIONALLY COMPATIBLE | **YES** — 399/399 real-engine financial tests | **YES** — 399/399 | **YES** — 399/399 (11 failures found and fixed this round — §5) | YES (the full default test suite runs on it) | not evaluated |
 | TRANSACTIONALLY COMPATIBLE | **YES** | **YES** — after the `innodb_snapshot_isolation` fix (§6) | **YES** — after the savepoint fix to `PaymentService`/`PaymentEventProcessor` (§5) | Single-writer; proves algorithm shape, not lock/abort semantics (§8) | not evaluated |
-| CONCURRENCY-COMPATIBLE | **YES** — real, independent-OS-process proof, 16/16 | **YES** — real proof, 16/16, after the retry + probe fixes (§6) | **YES** — real proof, 16/16 | **NO** — single-writer by construction (§8) | not evaluated |
+| CONCURRENCY-COMPATIBLE | **YES** — real, independent-OS-process proof, 67/67 | **YES** — real proof, 67/67, after the retry + probe fixes (§6) | **YES** — real proof, 67/67 | **NO** — single-writer by construction (§8) | not evaluated |
 | TESTED | **YES** | **YES** | **YES** | YES | NO |
 | PROVEN | **YES** | **YES** | **YES** | PARTIAL — algorithm/shape only, explicitly not concurrency (§8) | NO |
 | **SUPPORTED** | **YES** | **YES** | **YES** | **NO** (dev/fast-test engine, not a production concurrency claim — §8) | **NO**, not evaluated (explicitly out of scope) |
@@ -217,6 +217,56 @@ real block, before being adopted.
 DBPORT-08/09 (no oversell, exactly-one stock effect) are now MySQL-,
 MariaDB- and PostgreSQL-proven, independently.
 
+### Inventory Control (`feat/inventory-control`)
+
+Executed separately on each engine at its default isolation level, on the
+definitive code, with independent OS processes. Contract and details:
+`docs/inventory/INVENTORY-CONTROL.md` §24.
+
+| Proof | MySQL 8.0.44 | MariaDB 11.8.9 | PostgreSQL 16.15 |
+|---|---|---|---|
+| `tests/Concurrency`, fresh database (16 reservation + 51 control scenarios) | 67/67 | 67/67 | 67/67 |
+| `tests/Feature/Domain/Inventory` | 338/338 | 338/338 | 338/338 |
+| Financial suites (`Payments`, `Payouts`, `Orders`, `Store`) | 399/399 | 399/399 | 399/399 |
+| Upgrade vs fresh install, schema dump | byte-identical | byte-identical | byte-identical |
+| `migrate:rollback --step=4` vs pre-branch schema | identical | identical | identical |
+
+The control scenarios cover receipt, write-off, correction, adoption, creation,
+counts and sale evidence against each other and against reserve, commit and
+release, deterministically (the other process verified blocked) and from
+barriers; five SIGKILL a worker holding an open transaction; eleven let the engine
+time a blocked worker out (`1205`, or `55P03`) and repeat the call on the same
+connection; three keep the danger described below under test.
+
+The 3 PostgreSQL Inventory failures of earlier runs were **pre-existing** test
+defects: three reservation tests continued a transaction after an expected refusal
+without a savepoint (`25P02`), and failed identically on the untouched merge base.
+They now use `expectDatabaseRefusal()`. That directory is still not part of the
+real-engine CI job.
+
+**MySQL and MariaDB differ from PostgreSQL when a nested lock-wait timeout is
+swallowed.** A caller's transaction that catches it and commits can persist part of
+a multi-line Order on MySQL and MariaDB; on PostgreSQL nothing persists. That is an
+accident of the framework's error list, not portability to rely on:
+`docs/inventory/INVENTORY-CONTROL.md` §24.7.
+
+Findings of this round:
+
+- **SQLite hid a real defect.** It reads an unknown quoted identifier as a string,
+  so a dynamic `where "key" = ?` in the integrity checker ran silently; all three
+  server engines refused it. Fixed.
+- **MariaDB's `innodb_snapshot_isolation` can mask a missing lock in a narrow run**:
+  with `lock()` mutated into a plain read, 5 scenarios still pass on MariaDB, while
+  the whole file fails 11 of 67. The mutation is killed, but a green MariaDB run of
+  a few scenarios does not prove a lock is unneeded.
+- **Plain reads after a transaction's own UPDATE see that row version.** On MySQL
+  a plain read placed after the `UPDATE` is right by accident; placed before, the
+  adopt-vs-commit scenario catches it. MariaDB and PostgreSQL reach no wrong state
+  either way, for different reasons (`1020` retry; per-statement snapshots).
+
+No engine-specific behavior was added: the only retry remains the classified
+`HY000`/`1020` one. No nullable-unique semantics are relied on (§15).
+
 ## 7. Exception-classification portability
 
 Unchanged in shape from Round 3/4 (six classifiers, SQLSTATE-plus-message
@@ -311,8 +361,9 @@ has now run, against real MySQL 8.0.44, MariaDB 11.8.9 and PostgreSQL
   `tests/Feature/Domain/Payments/**`, `tests/Feature/Domain/Payouts/**`,
   `tests/Feature/Domain/Orders/**` — 399/399 on each of the three engines.
 - `tests/Concurrency/Inventory{Mysql,Mariadb,Postgres}ConcurrencyTest.php` —
-  16/16 on each, independent OS processes/connections throughout, never
-  sequential calls dressed up as concurrency.
+  67/67 on each (16 reservation + 51 Inventory Control scenarios, §6), independent
+  OS processes/connections throughout, never sequential calls dressed up as
+  concurrency.
 
 ## 14. Portability invariants — current status
 
@@ -326,7 +377,7 @@ has now run, against real MySQL 8.0.44, MariaDB 11.8.9 and PostgreSQL
 | DBPORT-06 | Money remains exact and float-free | **SATISFIED** (§10), with MySQL's silent-rounding behavior now disclosed |
 | DBPORT-07 | Payment/Payout CAS operations retain exactly-one-effect semantics | **SATISFIED**, live-proven on all three engines (399/399 each) |
 | DBPORT-08 | Inventory cannot oversell under real concurrent connections | **PROVEN on MySQL, MariaDB, PostgreSQL** — 0 violations across 677/529/412 real reservations respectively |
-| DBPORT-09 | Inventory terminal transitions produce exactly one stock effect | Same as DBPORT-08 |
+| DBPORT-09 | Inventory terminal transitions produce exactly one stock effect | Same as DBPORT-08; since `feat/inventory-control` also exactly one sale movement, proven on all three engines (§6) |
 | DBPORT-10 | No correctness-critical exception handling depends on an unsafe vendor message string | **SATISFIED** — every classifier requires SQLSTATE class *and* message/driver-code precision |
 | DBPORT-11 | SQLite success is not treated as proof of server-engine concurrency | **UPHELD** |
 | DBPORT-12 | No engine is called SUPPORTED until required real-engine tests pass | **UPHELD** — MariaDB and PostgreSQL only marked SUPPORTED after their respective defects (§5, §6) were fixed and reverified live |
@@ -357,8 +408,9 @@ has now run, against real MySQL 8.0.44, MariaDB 11.8.9 and PostgreSQL
   round did not widen them), alongside the existing SQLite CI, ~7-9 minutes
   wall-clock (matrix entries run in parallel). A separate workflow,
   `.github/workflows/real-engine-concurrency.yml`, runs the real,
-  independent-OS-process Inventory concurrency suite (16 tests per engine,
-  ~11-14 minutes each — see §13) on the same 3-way matrix, but deliberately
+  independent-OS-process Inventory concurrency suite (16 tests per engine when
+  this workflow was written, 67 since `feat/inventory-control`;
+  ~11-14 minutes each then — see §13) on the same 3-way matrix, but deliberately
   **outside** that push/PR path (`schedule: '0 3 * * *'` + `workflow_dispatch`
   only) so it never becomes the thing standing between a PR and review.
   Both workflows use only a fixed, disposable-only password

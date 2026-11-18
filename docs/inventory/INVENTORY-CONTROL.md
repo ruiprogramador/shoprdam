@@ -1,21 +1,30 @@
-# Inventory control — design (`design/inventory-control`)
+# Inventory control (`design/inventory-control`, `feat/inventory-control`)
 
-**Status: DESIGN ONLY. Nothing in this document is implemented.** It is the
-contract that a future `feat/inventory-control` branch implements. Every
-mechanism below is marked **PROPOSED**, **PRODUCT DECISION REQUIRED** or
-**BLOCKED**. Nothing here is ENFORCED, and nothing here may be cited as
-evidence that a capability exists (`CLAUDE.md` §9).
+**Status: IMPLEMENTED by `feat/inventory-control`, NOT ACTIVATED.** The contract
+below is built, tested and proven on real engines, and nothing in production
+calls it: no endpoint, job, command, listener or UI exists, so it has no
+production effect yet. Physical counting has a further gate (STOCK-22, §7.5), and
+every production integration of reservations has another (STOCK-23, §24.7).
+Everything still open stays **PRODUCT DECISION REQUIRED** or **BLOCKED** and is
+not implemented.
 
-The implemented Inventory truth is `docs/inventory/INVENTORY-RESERVATIONS.md`.
-Where this document restates it, the text says **EXISTING** and cites it.
-Engine support and real-engine evidence belong to
-`docs/architecture/DATABASE-SUPPORT.md`, which is authoritative. No
-engine claim made here overrides it.
+**How to read this document.** It is the design record that was approved before
+the implementation, kept as written so its reasoning survives. Sections headed
+PROPOSED describe what was designed; **§24 records what became of it**, every
+place the implementation differs from the wording here, and the evidence.
+§17 carries the current status of every invariant.
+
+`docs/inventory/INVENTORY-RESERVATIONS.md` stays authoritative for reservations.
+Where this document restates it, the text says **EXISTING** and cites it. Engine
+support and real-engine evidence belong to
+`docs/architecture/DATABASE-SUPPORT.md`, which is authoritative. No engine claim
+made here overrides it.
 
 | Status | Meaning in this document |
 |---|---|
-| **EXISTING** | implemented today, described in `INVENTORY-RESERVATIONS.md`; restated only so the new contract can be checked against it |
-| **PROPOSED** | designed here; to be implemented, tested and real-engine-proven by `feat/inventory-control` |
+| **EXISTING** | implemented before this contract, described in `INVENTORY-RESERVATIONS.md`; restated only so the new contract can be checked against it |
+| **PROPOSED** | the design's wording for what `feat/inventory-control` was to build; see §17 and §24 for what it became |
+| **ENFORCED** | implemented, with the code, database and test protection §17 names, and proven on the engines §24 lists |
 | **PRODUCT DECISION REQUIRED** | the repository cannot decide it; options and consequences recorded (§20) |
 | **BLOCKED** | depends on the reservation/payment lifecycle decision (§21) or on Fulfilment, which does not exist |
 
@@ -32,9 +41,9 @@ engine claim made here overrides it.
 | Lock order | Inventory row `FOR UPDATE` (ascending id), then its reservation rows, then evidence inserts and guarded counter updates. The parent is always locked before a child is written (§10) |
 | Actor evidence | `actor_type` + `actor_user_id` snapshot, **no foreign key**. Deleting a User neither destroys nor mutates stock history (§4.5) |
 | Legacy | An Inventory with `is_baselined = false` (the migration default) is *unevidenced legacy*. Control operations refuse it until `adopt()` records an explicit `adopted` baseline. Nothing is backfilled. Every movement is stamped with `after_baseline`, taken from the locked Inventory row. The reconciliation needs neither a SUM at adoption nor any read-view premise (§8.4) |
-| Activation gate | `submitCount` may be implemented and proven, but must **not** get a production caller until O-1 (selling while a discrepancy is open) and O-8 are decided (§7.5) |
+| Activation gate | `submitCount` is implemented and proven, and must **not** get a production caller until O-1 (selling while a discrepancy is open) and O-8 are decided (§7.5, STOCK-22) |
 | Blocked | when `commit` is called relative to payment; resolving a discrepancy by releasing reservations; count semantics for committed-but-undispatched units (§21) |
-| Production effect of this branch | none — documentation only |
+| Production effect | none yet: every service is implemented with no production caller (§24) |
 
 ## 1. Audit findings (condensed)
 
@@ -512,7 +521,8 @@ The resulting chain is:
 Inventory X lock → reservation CAS (the claim) → counter UPDATE → sale INSERT
 ```
 
-It is all inside the EXISTING order-level transaction, so all lines or none.
+It is all inside the EXISTING order-level transaction, so all lines or none, on
+the condition recorded in §24.7.
 This rules out each failure mode:
 
 | Requirement | Mechanism |
@@ -1061,9 +1071,11 @@ is evidence the implementation must produce, not a premise the design assumes.
 ### 10.6 Errors
 
 - Deadlock (1213 / 40P01), lock-wait timeout (1205 / 55P03) and serialization
-  failure (40001): the transaction has rolled back, so there is no partial
-  effect. They surface to the caller and are **not** retried (`CLAUDE.md` §4).
-  Repeating the same key is safe.
+  failure (40001): they surface to the caller and are **not** retried
+  (`CLAUDE.md` §4). Repeating the same key is safe. There is no partial effect once
+  the error has left the outermost transaction. **As implemented, a caller's
+  transaction that catches one and commits can persist partial writes on MySQL and
+  MariaDB: §24.7.**
 - The EXISTING MariaDB 1020 retry is extended to the new locking reads, with
   the same narrow classifier.
 
@@ -1250,35 +1262,39 @@ unbaselined) is derived from `is_baselined` and the baseline row's `kind`.
 The flag's only transition is `false → true`: at creation (genesis) or by
 `adopt()`'s CAS. It is never reset.
 
-## 17. Invariant registry (`STOCK-XX`) — all PROPOSED unless stated
+## 17. Invariant registry (`STOCK-XX`)
 
-A new prefix is used so that nothing proposed can be mistaken for the
-EXISTING `INVENTORY-XX`, which stays in `INVENTORY-RESERVATIONS.md`.
+A separate prefix from the EXISTING `INVENTORY-XX`, which stays in
+`INVENTORY-RESERVATIONS.md`. **ENFORCED** here means the protection named in the
+row exists and is proven as §24 records. A limitation stays a limitation: none
+of these is a claim about raw SQL, direct database access or isolation levels
+other than each engine's default.
 
 | ID | Statement | Owner | Code protection | DB protection | Concurrency | Idempotency | Evidence / test required | Status | Limitations |
 |---|---|---|---|---|---|---|---|---|---|
-| STOCK-01 | Every change of `on_hand_quantity` is paired, in the same transaction, with exactly one movement whose `quantity_delta` equals the change | `InventoryMovementWriter` | single writer; one UPDATE + one INSERT per method | movement CHECKs; equation (detection) | Inventory X lock | per-reason key | writer unit/feature tests; mutation probe "UPDATE without INSERT"; architecture: only the writer changes `on_hand_quantity` | PROPOSED | raw SQL; coordinated tampering (§15.3) |
-| STOCK-02 | Movements, baselines and counts are never updated or deleted by application code; count status changes only by the §16 CAS | models, services | `perform*` guards; no delete code | RESTRICT FKs | — | — | immutability tests per Eloquent style; scans | PROPOSED | raw `DELETE` of an unreferenced movement is detected, not prevented |
-| STOCK-03 | A successful control operation has exactly one effect per `(inventory, idempotency key)`; an identical replay returns it; a different payload is refused | services | pre-check + fingerprint | NOT NULL composite unique | unique claim after the lock; full rollback on loss | bounded retry → replay | duplicate / conflict / race tests; real-engine "same key ×3" | PROPOSED | caller-owned RR transaction: fail closed, not converge |
-| STOCK-04 | A committed reservation has at most one sale movement, with `delta = −quantity`, on its own Inventory; every commit made after deployment on a genesis Inventory has exactly one | writer via `commit` | CAS winner only | `sale:reservation:<id>` unique; correlation CHECK; RESTRICT | EXISTING CAS + pre-lock | EXISTING same-state no-op | commit / duplicate-commit tests; real-engine commit races extended with movement counts | PROPOSED | pre-deployment commits have no sale evidence |
-| STOCK-05 | `receive` never changes `reserved`; `writeOff` and a receipt reversal only consume `available` | writer | fixed statement shapes | EXISTING `reserved ≤ on_hand` CHECK | guarded UPDATE under the lock | — | write-off-exceeds-available tests; real-engine write-off vs reserve | PROPOSED | — |
-| STOCK-06 | A count is applied only if `on_hand = expected_on_hand` at application; otherwise it is `stale` and changes nothing | `InventoryCountService` | decision from the locked row | CAS predicate; status-evidence CHECK | X lock | key → stored outcome | P3 scenarios A–F; real-engine count vs commit (both orders) | PROPOSED | `expected` is client-claimed (T-5) |
-| STOCK-07 | A count with `observed < reserved` never changes `on_hand` or any reservation; it is kept as `discrepancy_open` until a later applied count | `InventoryCountService` | decision order | status-evidence CHECK; `reserved ≤ on_hand` CHECK | X lock | — | the 10/7/5 test; resolution tests | PROPOSED (mechanism) | new reservations may still consume system-available units (O-1); therefore not activated (STOCK-22) |
-| STOCK-08 | `0 ≤ reserved ≤ on_hand` holds after every control operation | all | predicates | EXISTING CHECK (the CHECK itself is EXISTING, INVENTORY-01) | locks | — | CONSERVATION sequence extended with control operations | PROPOSED (for the new operations) | CHECK is a backstop; the predicates are the guarantee |
-| STOCK-09 | `on_hand_quantity` never overflows; quantities are strict integers within the stated bounds | services, writer | strict int validation | overflow predicate `on_hand ≤ MAX − q` | guarded UPDATE | — | boundary tests at `MAX`, `MAX − q + 1` | PROPOSED | — |
-| STOCK-10 | An Inventory is created only by `InventoryControlService`, at `(0, 0)`, with a genesis baseline in the same transaction; never by Catalog | `InventoryControlService` | single creator | `unique(product_id)`; baseline kind CHECK | unique race → replay | identity replay | creation / race tests; `CatalogDomainBoundaryTest` unchanged | PROPOSED | raw insert produces an unbaselined row (detected) |
-| STOCK-11 | An unbaselined Inventory (`is_baselined = false`) is reported as such; control operations refuse it until `adopt()`; adoption changes no quantity and fabricates no movement; every movement's `after_baseline` equals the flag read under its transaction's Inventory lock; no migration backfills evidence | services, writer, checker | the precondition and the stamp both come from the locked row | `unique(inventory_id)` on baselines; flag CAS; stamp CHECK for non-sale reasons | X lock; locking read only (§10.5) — no new engine premise | identity + fingerprint | adoption tests; real-engine adopt vs commit in both orders (§22.16) | PROPOSED | a raw write of the flag or a stamp is detected (`baseline_flag_mismatch`, equation), not prevented |
-| STOCK-12 | For every baselined Inventory, equation §15.1 holds | checker (detection) | — | — | — | — | checker tests incl. tamper cases | PROPOSED | §15.3; a live-DB transient needs a re-check |
-| STOCK-13 | At most one correction per movement; only `receipt` and `write_off` are correctable; `sale` and `count_adjustment` never are; `delta = −original` | `InventoryControlService` | precondition checks | deterministic key unique; correlation CHECK; self-FK RESTRICT | X lock | replay / conflict | double-correction tests; real-engine duplicate correction | PROPOSED | cross-row delta equality is service- and checker-enforced only |
-| STOCK-14 | Stock history is never cascade-deleted or mutated by the deletion of any other entity; no inventory table references `users` | migrations | model guards | all FKs RESTRICT; no actor FK | — | — | FK introspection per engine (`dbForeignKeyInfo`); scans | PROPOSED | — |
-| STOCK-15 | Inventory has no Payment/Wallet/provider/HTTP/Order-lifecycle dependency and reads no money; refund ≠ return ≠ restock; nothing outside the allowlist calls the inventory services | domain | dependency scan (EXISTING, extended) | — | — | — | `InventoryBoundaryTest` (extended) | PROPOSED (true today structurally through the EXISTING INVENTORY-13/19 scans) | static scans' blind spots (EXISTING §17) |
-| STOCK-16 | Every transaction follows the global lock order of §10.1 | all | fixed statement order | — | the order itself | — | real-engine no-deadlock scenarios; mutation probes removing the pre-lock | PROPOSED | freedom from deadlock is evidence, not proof |
-| STOCK-17 | Every manual stock-changing operation carries a Store-owner actor and a non-blank note | services | validation | actor and note CHECKs | — | the note is part of the fingerprint | validation tests | PROPOSED | the note's content is not verified |
-| STOCK-18 | A control operation is executed only by the owner of the Store owning the Inventory's Product | services | ownership re-read (domain precondition) | — | — | the actor is part of the fingerprint | actor tests | PROPOSED (the domain check); HTTP authorization: PRODUCT DECISION REQUIRED / future | no RBAC, staff or Admin override |
-| STOCK-19 | Idempotency keys compare identically on every supported engine | services | grammar | — | — | — | classifier + grammar tests on real engines | PROPOSED | — |
+| STOCK-01 | Every change of `on_hand_quantity` is paired, in the same transaction, with exactly one movement whose `quantity_delta` equals the change | `InventoryMovementWriter` | single writer; one UPDATE + one INSERT per method | movement CHECKs; equation (detection) | Inventory X lock | per-reason key | writer unit/feature tests; mutation probe "UPDATE without INSERT"; architecture: only the writer changes `on_hand_quantity` | ENFORCED | raw SQL; coordinated tampering (§15.3) |
+| STOCK-02 | Movements, baselines and counts are never updated or deleted by application code; count status changes only by the §16 CAS | models, services | `perform*` guards; no delete code | RESTRICT FKs | — | — | immutability tests per Eloquent style; scans | PARTIALLY ENFORCED | raw `DELETE` of an unreferenced movement is detected, not prevented |
+| STOCK-03 | A successful control operation has exactly one effect per `(inventory, idempotency key)`; an identical replay returns it; a different payload is refused | services | pre-check + fingerprint | NOT NULL composite unique | unique claim after the lock; full rollback on loss | bounded retry → replay | duplicate / conflict / race tests; real-engine "same key ×3" | ENFORCED | caller-owned RR transaction: fail closed, not converge |
+| STOCK-04 | A committed reservation has at most one sale movement, with `delta = −quantity`, on its own Inventory; every commit made after deployment on a genesis Inventory has exactly one | writer via `commit` | CAS winner only | `sale:reservation:<id>` unique; correlation CHECK; RESTRICT | EXISTING CAS + pre-lock | EXISTING same-state no-op | commit / duplicate-commit tests; real-engine commit races extended with movement counts | ENFORCED | pre-deployment commits have no sale evidence |
+| STOCK-05 | `receive` never changes `reserved`; `writeOff` and a receipt reversal only consume `available` | writer | fixed statement shapes | EXISTING `reserved ≤ on_hand` CHECK | guarded UPDATE under the lock | — | write-off-exceeds-available tests; real-engine write-off vs reserve | ENFORCED | — |
+| STOCK-06 | A count is applied only if `on_hand = expected_on_hand` at application; otherwise it is `stale` and changes nothing | `InventoryCountService` | decision from the locked row | CAS predicate; status-evidence CHECK | X lock | key → stored outcome | P3 scenarios A–F; real-engine count vs commit (both orders) | ENFORCED | `expected` is client-claimed (T-5) |
+| STOCK-07 | A count with `observed < reserved` never changes `on_hand` or any reservation; it is kept as `discrepancy_open` until a later applied count | `InventoryCountService` | decision order | status-evidence CHECK; `reserved ≤ on_hand` CHECK | X lock | — | the 10/7/5 test; resolution tests | ENFORCED (mechanism); not activated, STOCK-22 | new reservations may still consume system-available units (O-1); therefore not activated (STOCK-22) |
+| STOCK-08 | `0 ≤ reserved ≤ on_hand` holds after every control operation | all | predicates | EXISTING CHECK (the CHECK itself is EXISTING, INVENTORY-01) | locks | — | CONSERVATION sequence extended with control operations | ENFORCED | CHECK is a backstop; the predicates are the guarantee |
+| STOCK-09 | `on_hand_quantity` never overflows; quantities are strict integers within the stated bounds | services, writer | strict int validation | overflow predicate `on_hand ≤ MAX − q` | guarded UPDATE | — | boundary tests at `MAX`, `MAX − q + 1` | ENFORCED | — |
+| STOCK-10 | An Inventory is created only by `InventoryControlService`, at `(0, 0)`, with a genesis baseline in the same transaction; never by Catalog | `InventoryControlService` | single creator | `unique(product_id)`; baseline kind CHECK | unique race → replay | identity replay | creation / race tests; `CatalogDomainBoundaryTest` unchanged | ENFORCED | raw insert produces an unbaselined row (detected) |
+| STOCK-11 | An unbaselined Inventory (`is_baselined = false`) is reported as such; control operations refuse it until `adopt()`; adoption changes no quantity and fabricates no movement; every movement's `after_baseline` equals the flag read under its transaction's Inventory lock; no migration backfills evidence | services, writer, checker | the precondition and the stamp both come from the locked row | `unique(inventory_id)` on baselines; flag CAS; stamp CHECK for non-sale reasons | X lock; locking read only (§10.5) — no new engine premise | identity + fingerprint | adoption tests; real-engine adopt vs commit in both orders (§22.16) | ENFORCED | a raw write of the flag or a stamp is detected (`baseline_flag_mismatch`, equation), not prevented |
+| STOCK-12 | For every baselined Inventory, equation §15.1 holds | checker (detection) | — | — | — | — | checker tests incl. tamper cases | ENFORCED (detection) | §15.3; a live-DB transient needs a re-check |
+| STOCK-13 | At most one correction per movement; only `receipt` and `write_off` are correctable; `sale` and `count_adjustment` never are; `delta = −original` | `InventoryControlService` | precondition checks | deterministic key unique; correlation CHECK; self-FK RESTRICT | X lock | replay / conflict | double-correction tests; real-engine duplicate correction | ENFORCED | cross-row delta equality is service- and checker-enforced only |
+| STOCK-14 | Stock history is never cascade-deleted or mutated by the deletion of any other entity; no inventory table references `users` | migrations | model guards | all FKs RESTRICT; no actor FK | — | — | FK introspection per engine (`dbForeignKeyInfo`); scans | ENFORCED | — |
+| STOCK-15 | Inventory has no Payment/Wallet/provider/HTTP/Order-lifecycle dependency and reads no money; refund ≠ return ≠ restock; nothing outside the allowlist calls the inventory services | domain | dependency scan (EXISTING, extended) | — | — | — | `InventoryBoundaryTest` (extended) | ENFORCED (static scans) | static scans' blind spots (EXISTING §17) |
+| STOCK-16 | Every transaction follows the global lock order of §10.1 | all | fixed statement order | — | the order itself | — | real-engine no-deadlock scenarios; mutation probes removing the pre-lock | ENFORCED (exercised interleavings) | freedom from deadlock is evidence, not proof |
+| STOCK-17 | Every manual stock-changing operation carries a Store-owner actor and a non-blank note | services | validation | actor and note CHECKs | — | the note is part of the fingerprint | validation tests | ENFORCED | the note's content is not verified |
+| STOCK-18 | A control operation is executed only by the owner of the Store owning the Inventory's Product | services | ownership re-read (domain precondition) | — | — | the actor is part of the fingerprint | actor tests | ENFORCED (the domain check); HTTP authorization: future | no RBAC, staff or Admin override |
+| STOCK-19 | Idempotency keys compare identically on every supported engine | services | grammar | — | — | — | classifier + grammar tests on real engines | ENFORCED | — |
 | STOCK-20 | Restock of physically returned goods | — | — | — | — | — | — | **PRODUCT DECISION REQUIRED** (P8) | — |
 | STOCK-21 | Commit (and therefore sale evidence) happens at a defined point of the payment lifecycle | — | — | — | — | — | — | **BLOCKED** (§21) | — |
 | STOCK-22 | Physical counting has no production caller until the selling policy for open discrepancies (O-1) is decided and the commit-timing question behind O-8 is resolved; counts are never described as an operational feature before that | architecture boundary | — | — | — | — | `InventoryBoundaryTest`: `InventoryCountService` caller allowlist empty | **PRODUCT DECISION REQUIRED** (activation; O-1) + **BLOCKED** (O-8). The count *mechanism* is PROPOSED under STOCK-06/07 | a static scan, not a runtime gate |
+| STOCK-23 | No production caller composes `reserve`, `commit` or `release` until a verifiable composition strategy exists; every future caller lets concurrency errors escape and rolls its transaction back | reservations | the empty caller allowlist | — | — | — | "has NO production caller of the inventory domain"; `T-17 KNOWN DANGER, NOT SAFE` scenarios | BLOCKED | the caller rule is documentation, not a technical guarantee: §24.7 |
 
 ## 18. Threat model — PROPOSED behavior
 
@@ -1300,7 +1316,7 @@ EXISTING `INVENTORY-XX`, which stays in `INVENTORY-RESERVATIONS.md`.
 | T-14 | Inventory deletion | model guard; DB refuses via baseline, movements, counts and reservations RESTRICT |
 | T-15 | direct or raw DB corruption | CHECKs refuse impossible rows; RESTRICT refuses deleting referenced rows; the checker detects the rest; coordinated tampering is undetectable (§15.3) |
 | T-16 | DB deadlock | full rollback; surfaced; not retried; safe to repeat the same key; the lock order is designed to avoid it (§10) |
-| T-17 | lock timeout | same as T-16 |
+| T-17 | lock timeout | same as T-16, proven on all three engines with the engine's own timeout (§24.3). Exception: a caller's transaction that swallows it and commits (§24.7) |
 | T-18 | serialization failure (PostgreSQL non-default isolation) | same as T-16; never an incorrect effect |
 | T-19 | engine-specific abort (PostgreSQL `25P02` after an error) | the operation never continues in the failed transaction; the retry uses a new one; MariaDB `1020` uses the classified bounded retry |
 | T-20 | forged system key | caller keys cannot contain `:` and are prefixed `client:` (§9.2) |
@@ -1339,7 +1355,7 @@ EXISTING `INVENTORY-XX`, which stays in `INVENTORY-RESERVATIONS.md`.
 
 | Open product decision | Why the repository cannot decide it | Options | Consequences | Blocks what? |
 |---|---|---|---|---|
-| **O-1** Selling while a discrepancy is open | no oversold/backorder policy; P1 fixed only what the count does | (a) accept the risk, with an explicit operational response policy; (b) block `reserve` on an open discrepancy (a deliberate change of the reservation contract + new real-engine proof). Policy D is excluded by the fixed P1 | (a) physical oversell remains possible within the response window; (b) a reservation redesign | **the operational activation of physical counting** (any production caller of `InventoryCountService`, STOCK-22, §7.5). It does **not** block implementing, testing or proving the count mechanism in `feat/inventory-control`. Option (b) would additionally require its own reservation-contract branch |
+| **O-1** Selling while a discrepancy is open | no oversold/backorder policy; P1 fixed only what the count does. `InventoryCountServiceTest` pins today's behavior: the reserve guard does not see a discrepancy | (a) accept the risk, with an explicit operational response policy; (b) block `reserve` on an open discrepancy (a deliberate change of the reservation contract + new real-engine proof). Policy D is excluded by the fixed P1 | (a) physical oversell remains possible within the response window; (b) a reservation redesign | **the operational activation of physical counting** (any production caller of `InventoryCountService`, STOCK-22, §7.5). It does **not** block implementing, testing or proving the count mechanism in `feat/inventory-control`. Option (b) would additionally require its own reservation-contract branch |
 | **O-2 (P8)** Returns: restock ceiling; mandatory correlation with a committed reservation; non-resellable returns; repeated or partial returns | no return workflow, RMA or partial refunds exist | per sub-question (§6.8) | defines the `restock` reason, its correlation column and its guard | the `restock` reason and any return operation |
 | **O-3 (P10)** Digital or unlimited Products | CATALOG-DOMAIN §14.3 is open | every Product needs an Inventory; or an explicit "unlimited" class | inventory control applies only to Products that have an Inventory | a future checkout's reserve step |
 | **O-4** How discrepancies are resolved operationally beyond a re-count | depends on releasing reservations | release, cancel or refund flows | — | **BLOCKED** (§21) |
@@ -1375,7 +1391,8 @@ specific answer to these, provided it wires nothing.
 
 ## 22. Implementation blueprint — `feat/inventory-control`
 
-This is a specification for a later branch. **Nothing below exists.**
+The specification the implementation followed, kept as written. §24 records the
+result and every difference.
 
 ### 22.1 Scope
 
@@ -1655,7 +1672,8 @@ requires it, never with `--prune`.
 - allow correcting a `sale`;
 - drop `unique(inventory_id, idempotency_key)`;
 - source `after_baseline` from a plain read instead of the locking read (the
-  adopt-vs-commit scenario must catch it on MySQL/MariaDB REPEATABLE READ);
+  adopt-vs-commit scenario must catch it on MySQL/MariaDB REPEATABLE READ; this
+  expectation was wrong, see §24.5);
 - let `adopt()` skip the flag CAS.
 
 ### 22.19 Definition of done
@@ -1677,3 +1695,258 @@ movements; backorders, negative stock, safety stock; RMA, return authorization,
 refund automation; fulfilment (picking, packing, shipping, delivery, tracking,
 carriers); cancellation; expiry; payment wiring; any UI, endpoint or frontend
 store; RBAC or roles.
+
+## 24. Implementation record — `feat/inventory-control`
+
+What was built, where it differs from the wording above, and the evidence. The
+sections above stay as they were approved; where this section contradicts them,
+this section is the current truth.
+
+### 24.1 What exists
+
+| Part | Files |
+|---|---|
+| Migrations (forward only) | `2026_10_30_090000_add_is_baselined_to_inventories_table` and `…090100…090300_create_inventory_{baselines,counts,movements}_table` |
+| Canonical services | `InventoryControlService`, `InventoryCountService`, `InventoryMovementWriter`; `InventoryReservationService::commit()` delegates its counters and sale evidence to the writer |
+| Models, enums, DTOs | `InventoryMovement`, `InventoryCount`, `InventoryBaseline`; `InventoryMovementReason`, `InventoryCountStatus`, `InventoryBaselineKind`, `InventoryActorType`; `app/Domain/Inventory/DTOs` |
+| Support | `InventoryRetry` (classifiers, bounded retry), `InventoryInput` (validation, identity grammar), `InventoryTarget` (target and owner resolution) |
+| Detection | `InventoryIntegrityChecker::audit()` extended; `evidenceReport()` new |
+
+**Nothing calls any of it in production.** Established migrations and schema
+baselines are unchanged. No frontend, endpoint, command or job was added.
+
+### 24.2 Differences from the wording above
+
+| Clause | Implemented as | Why |
+|---|---|---|
+| §15.2 lists `inventory_unbaselined` among the findings | `audit()` returns corruption only. `inventory_unbaselined` and open discrepancies come from `evidenceReport()` | §15.2 calls it "informational, not corruption"; §22.16 requires zero findings; `InventoryIntegrityCheckerTest` requires `audit() === []` on legacy rows. An unbaselined Inventory is still never reported as consistent |
+| §22.6 "All SQL uses bound parameters" | predicates and plain values are bound; the arithmetic in a `SET` uses the EXISTING `DB::raw('x + '.$quantity)` idiom with a typed `int` | `WalletLedgerSingleWriterTest` bans `DB::update(` across `app/`. Relaxing a financial scanner, or evading it, was not acceptable |
+| §6.3/§6.5/§6.7 signatures declare `int` quantities | declared `mixed`, validated by `is_int` | this repository has no `strict_types`: an `int` parameter would let PHP coerce `"5"`, `2.0` or `true` before §6.0.1 could refuse them |
+| §6.1 "`replayed = true`" | `createInventory()` keeps its `Inventory` return type: `wasRecentlyCreated` tells a creation from a replay | the signature in §6.1 and §22.6 returns an Inventory |
+| §6.1 does not mention an adopted row | refused like a legacy one | §9.1 says replay only if a `genesis` baseline exists |
+| §6.0 says "Notes: bounded length" | 2000 characters, valid UTF-8 | the design left the value open |
+| §6.0.2 does not mention a soft-deleted Store | a soft-deleted Store still has an owner | same reasoning as a soft-deleted Product: stock is physical |
+| §22.18 expected the adopt-vs-commit scenario to catch a plain-read stamp | it cannot, in the code's position | §24.5 |
+
+### 24.3 Real-engine evidence
+
+Each engine separately, MySQL 8.0.44, MariaDB 11.8.9 and PostgreSQL 16.15, at
+their default isolation levels, with independent OS processes. Definitive code.
+Authoritative record: `docs/architecture/DATABASE-SUPPORT.md` §6.
+
+| Proof | MySQL | MariaDB | PostgreSQL |
+|---|---|---|---|
+| Concurrency, fresh database (16 EXISTING + 51 control scenarios) | 67/67 | 67/67 | 67/67 |
+| Repeated runs on an accumulating database (3 per engine) | 3 runs: all clean | 3 runs: 2 clean, 1 failure | 3 runs: all clean |
+| Inventory + financial Feature suites | 737/737 | 737/737 | 737/737 |
+| Upgrade vs fresh, schema dump | byte-identical | byte-identical | byte-identical |
+| `migrate:rollback --step=4` vs pre-branch schema | identical | identical | identical |
+
+In the repeated runs, the 51 control scenarios passed all 9 times. The one failure
+is a Faker e-mail collision while building the fixture of an EXISTING reservation
+scenario, on a database four runs old (§24.6).
+
+A legacy row survives the upgrade with `is_baselined = false` and no fabricated
+baseline or movement.
+
+**Real process deaths.** Five scenarios SIGKILL a worker holding an open
+transaction (receipt, write-off, commit, applied count, adoption): on all three
+engines nothing partial survives and the row lock is released.
+
+**Real lock-wait timeouts (T-17).** Eleven scenarios put a worker behind a real open
+transaction, verify it is blocked, and let the engine give up after 2 s: `1205` on
+MySQL and MariaDB, `55P03` on PostgreSQL. They cover receipt, write-off, the same key
+behind its uncommitted twin, multi-line reserve, commit and release with the first
+line already written, count, correction, adoption, creation, and a multi-line commit
+composed in a caller's transaction that lets the error escape. Each asserts the
+error arrived once, with no hidden retry; that neither Laravel nor the engine still
+has a transaction open; and that the stored state did not change. The identical call
+then repeats on the same connection and applies once, replays, or comes out `stale`
+against stock that moved meanwhile. No compensation exists or runs. Three more
+scenarios keep the danger of §24.7 under test.
+
+### 24.4 Defects real engines found
+
+1. **`InventoryIntegrityChecker`: `whereKey()` called after `toBase()`.** On the
+   query builder that is a dynamic `where key = ?`. SQLite reads the unknown
+   quoted identifier `"key"` as a string, so the suite stayed green while the
+   confirming re-check silently read nothing. MySQL, MariaDB and PostgreSQL all
+   refused it. Fixed, and the test now asserts the finding's text.
+2. **A harness assertion, not a product defect:** `B.finished_at >= A.finished_at`
+   is false by construction, because A stamps it after COMMIT returns and the
+   server may release B first. The control scenarios assert instead that B ended
+   after A was told to commit.
+
+### 24.5 Mutation probes
+
+Each mutation ran on a disposable copy of the tree, was restored and
+checksum-verified. No mutation touched the working tree. These are hand-picked
+probes against named invariants: every percentage below is over that list, and says
+nothing about code coverage.
+
+**Reproduced on the final code.** Every number in this block comes from the last
+execution, on the code this branch ends with. Each real-engine probe first passed
+its scenario filter on clean code, and was checked to have changed the file and to
+still lint. No probe was invalid.
+
+| Default suite (SQLite) | Probes | Killed | Equivalent |
+|---|---|---|---|
+| code and schema | 39 | 38 | 1 |
+| planted production callers (4 of counting, 1 of `reserve`) | 5 | 5 | 0 |
+
+| Real engines | MySQL | MariaDB | PostgreSQL |
+|---|---|---|---|
+| `lock()` as a plain read | killed | killed | killed |
+| claim inserted before the Inventory lock | killed | killed | killed |
+| lost claim not retried | killed | killed | killed |
+| unique identity dropped | killed | killed | killed |
+| write-off guard removed | killed | killed | killed |
+| a lock timeout silently retried (T-17) | killed | killed | killed |
+| a timed-out line skipped, the rest committed (T-17) | killed | killed | killed |
+| `after_baseline` plain read, in place | equivalent | equivalent | equivalent |
+| `after_baseline` plain read, moved before the `UPDATE` | killed | equivalent | equivalent |
+| a later CHECK missing behind earlier refusals | not run | not run | killed |
+
+- **Non-equivalent results:** default suite 43 of 43; real engines 23 of 23, counted
+  as mutation-engine pairs. The 6 equivalents, 1 default-suite and 5 real-engine, are
+  outside both denominators, and the reason for each is below.
+- **Raw executions on real engines:** 38 mutated runs, 29 killed, 9 survived, because
+  several pairs ran under more than one filter. All 9 are explained: 6 are the
+  in-place stamp (the scenario and the whole file, on three engines), 2 are the moved
+  stamp, and 1 is `lock()` under the narrow filter on MariaDB.
+- **Controls:** the locking read moved before the `UPDATE` passes on all three engines.
+
+**Why each equivalent is one.**
+
+| Mutation | Engine | Evidence |
+|---|---|---|
+| `after_baseline` plain read, in place | MySQL | raw SQL with no application code: after its own `UPDATE`, the transaction reads flag = 1 while a read before it returns 0. Whole file 67/67 under the mutation |
+| same | MariaDB | raw SQL: the transaction aborts with `1020` before it can reach that read. Whole file 67/67 |
+| same | PostgreSQL | raw SQL: reads 1, each statement having its own snapshot. Whole file 67/67 |
+| moved before the `UPDATE` | MariaDB | same `1020`: the operation restarts on a fresh view |
+| moved before the `UPDATE` | PostgreSQL | same per-statement snapshot, at READ COMMITTED |
+| `adopt()` without its early return | SQLite | the insert then loses `unique(inventory_id)` and replays or, with a raw-set flag, the flag CAS finds nothing and refuses |
+
+Equivalence holds at each engine's default isolation and default
+`innodb_snapshot_isolation`. Those are the only settings run. The in-place stamp is
+killed only by the textual pin in `InventoryBoundaryTest`, not by behavior. The
+locking read stays in the code because being right through statement order alone is
+not a guarantee: moved before the `UPDATE`, the plain read stamps a sale as
+pre-adoption on real MySQL, and the adopt-vs-commit scenario kills it.
+
+**`lock()` as a plain read on MariaDB** survives the narrow filter of 5 scenarios
+and fails 11 of the 67 in the whole file. That survivor was an under-scoped probe,
+not a gap. The likely reason for the narrow result is the snapshot conflict
+restarting the operation, which is inferred and was not instrumented.
+
+**Historical, superseded, not part of the numbers above.**
+
+- The first real-engine matrix reported 21 executions and 17 kills. It counted one
+  mutation twice under two names, as "7 probes": there were 6 mutations.
+- An earlier default-suite pass killed 41 of 43. One survivor exposed a missing test,
+  which was added.
+- The probes in `docs/inventory/INVENTORY-RESERVATIONS.md` §20 are the reservation
+  round's own record. They were not re-run here, and their results stay historical.
+
+### 24.6 Known limitations found
+
+- **Composing these operations in a caller's transaction is not safe to do freely:**
+  §24.7. This is a defect that predates this branch, measured and kept under test,
+  not fixed; it is why STOCK-23 exists.
+- **Fixed in this branch, with the owner's authorization:** on PostgreSQL, three
+  EXISTING tests failed (`25P02`) because they kept using a transaction after an
+  expected refusal without a savepoint: `InventoryReservationServiceTest` "Q", and
+  "INVENTORY-01" and "constrains reservations" in `InventorySchemaTest`. They failed
+  identically on the untouched merge base. Worse than the red, every refusal after
+  the first in each of them passed on PostgreSQL by throwing `25P02`, which is also
+  a `QueryException`, so those assertions proved nothing there. They now use
+  `expectDatabaseRefusal()`, the existing helper, one savepoint per refusal.
+- `tests/Feature/Domain/Inventory` is still not in the real-engine CI job, which is
+  why nothing reported those three tests. Adding it is a workflow change, out of
+  this branch's scope. Until it happens, that directory is green on the server
+  engines only when someone runs it there.
+- **Pre-existing, reported, not fixed here:** `finished_at` ordering assertions in
+  the EXISTING real-engine scenarios have the harness defect of §24.4 and can fail
+  by milliseconds (`InventoryMariadbConcurrencyTest.php:215` did once, by 22 ms).
+- **Pre-existing, reported, not fixed here:** EXISTING real-engine scenarios use
+  Faker e-mails, which can collide on a database accumulating many runs. The suite
+  is meant for a freshly migrated database; the control scenarios use unique owners.
+- The nightly `real-engine-concurrency.yml` picks the control scenarios up through
+  the same test files, unchanged. Its comments still say 16 tests.
+- `InventoryIntegrityChecker::audit()` keeps the transient false positive on
+  `counter_disagrees_with_reservations` on a live database. Only the new equation
+  has a re-check.
+- Deadlock freedom is evidence over 2-4 workers, not a proof. Isolation levels
+  other than each engine's default were not run.
+
+STOCK-20, STOCK-21 and STOCK-22 stay as §17 records them.
+
+### 24.7 Composed in a caller's transaction: a known danger, and the production gate
+
+**The promise of "all lines or none" has a condition.** `reserve`, `commit` and
+`release` are atomic when their transaction is the outermost one, and when an error
+leaves the outermost transaction. On MySQL and MariaDB, a lock-wait timeout in a
+nested operation can leave partial writes in the outer transaction if the caller
+catches the exception and then commits.
+
+This is measured, on real engines, on the branch and on the untouched merge base:
+a two-line Order, the second Inventory held by another transaction, the operation
+nested in a caller's `DB::transaction()`, the timeout swallowed, the outer
+transaction committed.
+
+| | MySQL 8.0.44, MariaDB 11.8.9 | PostgreSQL 16.15 |
+|---|---|---|
+| The caller sees | `DeadlockException` | `QueryException` |
+| `commit` | line 1 `committed` with its `on_hand` drop and its `sale`; line 2 `reserved` | nothing persists |
+| `reserve` | line 1 `reserved` and its unit held; no line 2 | nothing persists |
+| `release` | line 1 `released`; line 2 `reserved` | nothing persists |
+| Repeating the call | `commit` and `release` finish the Order; **`reserve` fails closed** (`partiallyReserved`) and the unit stays held on line 1 | the operation runs normally |
+| `InventoryIntegrityChecker::audit()` | **no finding**: each line is consistent on its own | no finding |
+
+**Why.** `transition()` and `reserveWithinTransaction()` lock one Inventory per line,
+so a later line can block after an earlier one has written. MySQL and MariaDB undo
+only the timed-out statement (`innodb_rollback_on_timeout=OFF`, the default on both).
+Laravel 12's `handleTransactionException()` turns what it classifies as a concurrency
+error into a `DeadlockException` when nested, **without rolling the savepoint back**,
+on the premise that the whole transaction is gone. For a deadlock that is true. For
+a lock-wait timeout it is not.
+
+PostgreSQL differs by accident, not by design: `55P03` is not in the framework's
+list of concurrency errors, so the savepoint is rolled back. That is an observation
+about this framework version, not a guarantee.
+
+**The same path, not measured here.** A PostgreSQL deadlock (`40P01`) matches that
+list too, so it also skips the savepoint rollback; the transaction is aborted there,
+so a commit after swallowing it persists nothing, including the caller's own earlier
+work. The same goes for a MySQL or MariaDB deadlock victim, whose whole transaction
+is gone. MariaDB's snapshot conflict (`1020`) was measured: nested, it arrives as a
+`DeadlockException`, so `InventoryRetry` and the service's own retry loops, which
+catch `QueryException`, do not retry it.
+
+**What is safe, and proven (T-17, all three engines).** When the error is allowed to
+escape, nothing survives, in or out of a caller's transaction. Control operations
+take their one Inventory lock before writing anything, so a timeout there has
+nothing to leave behind.
+
+**Mandatory condition for every future production caller.** Concurrency errors must
+not be swallowed, and the outer transaction must be rolled back. That means any
+`DeadlockException` or `QueryException` raised by an inventory operation, and any
+wider `catch` around one.
+
+**This rule is documentation. It is not, by itself, a technical guarantee of
+atomicity.** Nothing in the code enforces it, and a caller that breaks it produces
+exactly the damage above, invisible to the checker.
+
+**Production gate (STOCK-23).** Production integration of `reserve`, `commit` and
+`release` stays blocked until a verifiable strategy for transactional composition
+exists: one that a real-engine test can prove, not a convention. No such strategy
+is designed here, and pre-locking the Inventories was considered and rejected for
+this branch, because it changes `reserve()` and does not cover other lock sources.
+The empty caller allowlist of `tests/Architecture/InventoryBoundaryTest.php` is what
+holds the gate. Lifting it is a decision, and needs that strategy first.
+
+**Regression.** Three scenarios in `tests/Concurrency/InventoryControlScenarios.php`,
+named `T-17 KNOWN DANGER, NOT SAFE`, assert the table above on each engine. They
+document a defect of composition so it stays visible. They are not a statement that
+this behavior is acceptable. A red there after a framework or service change means
+the danger moved, and this section has to be re-read before any expectation changes.

@@ -29,7 +29,27 @@ function mcDir(): string
 /** @return array{proc: resource, dir: string, name: string} */
 function mcSpawn(string $dir, string $name, string $action, Order $order, bool $hold = false): array
 {
-    $job = json_encode(['dir' => $dir, 'name' => $name, 'action' => $action, 'order' => $order->id, 'hold' => $hold]);
+    return mcSpawnJob($dir, $name, ['action' => $action, 'order' => $order->id, 'hold' => $hold]);
+}
+
+/**
+ * A control operation, addressed by its arguments instead of an Order.
+ *
+ * @param  array<string, mixed>  $args
+ * @return array{proc: resource, dir: string, name: string}
+ */
+function mcSpawnOp(string $dir, string $name, string $action, array $args, bool $hold = false): array
+{
+    return mcSpawnJob($dir, $name, ['action' => $action, 'args' => $args, 'hold' => $hold]);
+}
+
+/**
+ * @param  array<string, mixed>  $spec
+ * @return array{proc: resource, dir: string, name: string}
+ */
+function mcSpawnJob(string $dir, string $name, array $spec): array
+{
+    $job = json_encode(['dir' => $dir, 'name' => $name, ...$spec]);
     $php = array_values(array_filter(explode(' ', (string) getenv('INVENTORY_CONCURRENCY_WORKER_PHP_ARGS'))));
 
     $proc = proc_open(
@@ -99,13 +119,16 @@ function mcJoin(array ...$workers): void
  * Starts every job, waits until each worker is booted and connected, releases
  * them all at once, and returns each outcome.
  *
- * @param  list<array{name: string, action: string, order: Order}>  $jobs
+ * @param  list<array{name: string, action: string, order?: Order, args?: array<string, mixed>}>  $jobs
  * @return array<string, array<string, mixed>>
  */
 function mcRace(array $jobs): array
 {
     $dir = mcDir();
-    $workers = array_map(fn ($j) => mcSpawn($dir, $j['name'], $j['action'], $j['order']), $jobs);
+    $workers = array_map(
+        fn ($j) => isset($j['order']) ? mcSpawn($dir, $j['name'], $j['action'], $j['order']) : mcSpawnOp($dir, $j['name'], $j['action'], $j['args']),
+        $jobs,
+    );
 
     mcReady($dir, array_column($jobs, 'name'));
 

@@ -540,3 +540,9 @@ it('after all of the above, every inventory row satisfies the conservation equat
         ->and((int) $violations->over_reserved)->toBe(0)
         ->and((int) $violations->counter_drift)->toBe(0);
 });
+
+// ---------------------------------------------------------------------
+// Inventory control: the same scenarios on every engine (STOCK-XX)
+// ---------------------------------------------------------------------
+
+require __DIR__.'/InventoryControlScenarios.php';

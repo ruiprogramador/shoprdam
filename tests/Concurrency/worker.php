@@ -1,11 +1,11 @@
 <?php
 
 /**
- * Child process for InventoryMysqlConcurrencyTest.php and
- * InventoryPostgresConcurrencyTest.php — NOT a test, and never loaded by
- * Pest directly. One invocation = one independent PHP process with its own
- * database connection, performing exactly one canonical inventory operation
- * and writing its outcome to a file the parent reads.
+ * Child process for the Inventory{Mysql,Mariadb,Postgres}ConcurrencyTest.php
+ * suites — NOT a test, and never loaded by Pest directly. One invocation = one
+ * independent PHP process with its own database connection, performing exactly
+ * one canonical inventory operation and writing its outcome to a file the parent
+ * reads. A job carries an `order` (reservations) or `args` (control operations).
  *
  * Protocol (all files live in the per-scenario directory `dir`):
  *
@@ -16,6 +16,15 @@
  *                   InnoDB row locks
  *   <name>.commit   (hold mode only) the parent creates it to let the worker commit
  *   <name>.result   JSON outcome
+ *   <name>.retry    (`retry` jobs only) the parent creates it to make the worker
+ *                   repeat the identical call on this same connection
+ *   <name>.retry_result  JSON outcome of that repeat
+ *
+ * A `lock_timeout` job (seconds) makes the ENGINE give up on a blocked lock, on
+ * this connection only. A `compose` job runs the call inside a caller's outer
+ * transaction, which either lets the error escape (`rethrow`) or catches it and
+ * commits anyway (`swallow`), the shape docs/inventory/INVENTORY-CONTROL.md §24.7
+ * forbids to production callers. It exists to keep that danger under test.
  *
  * Hold mode wraps the real service call in an outer DB::transaction, exactly as
  * a checkout composing Order + reserve() would (the service's own transaction
@@ -27,6 +36,9 @@
  * database.
  */
 
+use App\Domain\Inventory\DTOs\StoreOwnerActor;
+use App\Domain\Inventory\Services\InventoryControlService;
+use App\Domain\Inventory\Services\InventoryCountService;
 use App\Domain\Inventory\Services\InventoryReservationService;
 use App\Models\Order;
 use Illuminate\Contracts\Console\Kernel;
@@ -81,14 +93,35 @@ $waitFor = function (string $file, float $seconds = 90.0) {
     }
 };
 
-$order = Order::query()->findOrFail($job['order']);
+$order = isset($job['order']) ? Order::query()->findOrFail($job['order']) : null;
+$args = $job['args'] ?? [];
 $service = app(InventoryReservationService::class);
+$control = app(InventoryControlService::class);
+$counts = app(InventoryCountService::class);
+
+$movement = fn ($result) => ['id' => $result->movement->id, 'replayed' => $result->replayed];
 
 $operation = fn () => match ($job['action']) {
     'reserve' => $service->reserve($order)->pluck('id')->all(),
     'commit' => $service->commit($order),
     'release' => $service->release($order),
+    'create' => $control->createInventory($args['product'], new StoreOwnerActor($args['actor']))->id,
+    'adopt' => $control->adopt($args['product'], new StoreOwnerActor($args['actor']), $args['note'])->id,
+    'receive' => $movement($control->receive($args['product'], $args['quantity'], $args['key'], new StoreOwnerActor($args['actor']), $args['note'])),
+    'writeOff' => $movement($control->writeOff($args['product'], $args['quantity'], $args['key'], new StoreOwnerActor($args['actor']), $args['note'])),
+    'correct' => $movement($control->correct($args['product'], $args['movement'], new StoreOwnerActor($args['actor']), $args['note'])),
+    'count' => (function () use ($counts, $args) {
+        $result = $counts->submitCount($args['product'], $args['expected'], $args['observed'], $args['key'], new StoreOwnerActor($args['actor']));
+
+        return ['id' => $result->count->id, 'status' => $result->count->status->value, 'replayed' => $result->replayed, 'resolved' => $result->resolvedCountIds];
+    })(),
 };
+
+if (isset($job['lock_timeout'])) {
+    DB::statement($connection === 'pgsql'
+        ? "SET lock_timeout = '".(int) $job['lock_timeout']."s'"
+        : 'SET SESSION innodb_lock_wait_timeout = '.(int) $job['lock_timeout']);
+}
 
 $connectionId = (int) DB::selectOne(
     $connection === 'pgsql' ? 'select pg_backend_pid() as id' : 'select connection_id() as id'
@@ -97,30 +130,54 @@ atomicWrite("{$dir}/{$name}.ready", (string) $connectionId);
 
 $waitFor("{$dir}/{$name}.go");
 
-$startedAt = microtime(true);
+$run = function () use ($job, $operation, $waitFor, $dir, $name, $connectionId) {
+    $startedAt = microtime(true);
+    $swallowed = null;
 
-try {
-    $value = ($job['hold'] ?? false)
-        ? DB::transaction(function () use ($operation, $waitFor, $dir, $name) {
-            $value = $operation();
-            file_put_contents("{$dir}/{$name}.locked", '1');
-            $waitFor("{$dir}/{$name}.commit");
+    try {
+        $value = match (true) {
+            (bool) ($job['hold'] ?? false) => DB::transaction(function () use ($operation, $waitFor, $dir, $name) {
+                $value = $operation();
+                file_put_contents("{$dir}/{$name}.locked", '1');
+                $waitFor("{$dir}/{$name}.commit");
 
-            return $value;
-        })
-        : $operation();
+                return $value;
+            }),
+            ($job['compose'] ?? null) === 'rethrow' => DB::transaction(fn () => $operation()),
+            ($job['compose'] ?? null) === 'swallow' => DB::transaction(function () use ($operation, &$swallowed) {
+                try {
+                    return $operation();
+                } catch (Throwable $e) {
+                    $swallowed = $e::class;
 
-    $outcome = ['status' => 'ok', 'value' => $value];
-} catch (Throwable $e) {
-    $outcome = [
-        'status' => 'error',
-        'class' => $e::class,
-        'message' => $e->getMessage(),
-        'sqlstate' => $e instanceof PDOException ? $e->getCode() : ($e->errorInfo[0] ?? null),
-        'driver_code' => $e->errorInfo[1] ?? null,
+                    return null;
+                }
+            }),
+            default => $operation(),
+        };
+
+        $outcome = ['status' => 'ok', 'value' => $value, 'swallowed' => $swallowed];
+    } catch (Throwable $e) {
+        $outcome = [
+            'status' => 'error',
+            'class' => $e::class,
+            'message' => $e->getMessage(),
+            'sqlstate' => $e instanceof PDOException ? $e->getCode() : ($e->errorInfo[0] ?? null),
+            'driver_code' => $e->errorInfo[1] ?? null,
+        ];
+    }
+
+    return $outcome + [
+        'connection_id' => $connectionId,
+        'started_at' => $startedAt,
+        'finished_at' => microtime(true),
+        'transaction_level' => DB::transactionLevel(),
     ];
+};
+
+atomicWrite("{$dir}/{$name}.result", json_encode($run()));
+
+if ($job['retry'] ?? false) {
+    $waitFor("{$dir}/{$name}.retry");
+    atomicWrite("{$dir}/{$name}.retry_result", json_encode($run()));
 }
-
-$outcome += ['connection_id' => $connectionId, 'started_at' => $startedAt, 'finished_at' => microtime(true)];
-
-atomicWrite("{$dir}/{$name}.result", json_encode($outcome));

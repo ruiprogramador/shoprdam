@@ -8,6 +8,7 @@ use App\Domain\Inventory\Exceptions\InvalidReservationException;
 use App\Domain\Inventory\Exceptions\InventoryIntegrityException;
 use App\Domain\Inventory\Models\Inventory;
 use App\Domain\Inventory\Models\InventoryReservation;
+use App\Domain\Inventory\Support\InventoryRetry;
 use App\Domain\Orders\Services\OrderLineIntegrityChecker;
 use App\Models\Order;
 use App\Models\OrderItem;
@@ -19,9 +20,11 @@ use Illuminate\Support\Facades\Log;
 /**
  * The single canonical boundary through which stock is reserved, consumed or
  * given back — see docs/inventory/INVENTORY-RESERVATIONS.md. Nothing else in
- * `app/` may write `inventories` or `inventory_reservations` (enforced
- * mechanically by tests/Architecture/InventoryBoundaryTest, plus refusal of
- * every Eloquent write on both models).
+ * `app/` may write `inventory_reservations` or `reserved_quantity`, except that a
+ * commit's counters go through InventoryMovementWriter, which pairs them with the
+ * sale evidence (enforced mechanically by
+ * tests/Architecture/InventoryBoundaryTest, plus refusal of every Eloquent write
+ * on both models).
  *
  * ## Vocabulary
  *
@@ -59,11 +62,18 @@ use Illuminate\Support\Facades\Log;
  * Idempotency is therefore enforced by the row itself, never by the caller
  * or by provider-event idempotency.
  *
- * ## Order-level, all-or-nothing
+ * ## Order-level, all-or-nothing, with one condition
  *
  * Every operation takes an Order and acts on all of its lines in ONE
- * transaction: a failure on any line rolls back every line's effect. Lines
- * are always processed in ascending (inventory id, order item id) order — a
+ * transaction. When that transaction is the outermost one, a failure on any line
+ * rolls back every line's effect. When a caller composed it inside its own
+ * transaction, that holds only if the error also leaves the outer transaction:
+ * on MySQL and MariaDB a lock-wait timeout on a later line reaches the caller
+ * with the earlier lines still written, and a caller that catches it and commits
+ * persists part of the Order. Nothing here can prevent that, which is why no
+ * production caller may be wired yet (docs/inventory/INVENTORY-CONTROL.md §24.7).
+ *
+ * Lines are always processed in ascending (inventory id, order item id) order — a
  * fixed global lock order, so two multi-line operations can never wait on each
  * other in a cycle.
  *
@@ -88,7 +98,8 @@ use Illuminate\Support\Facades\Log;
  *   the source of truth; an unknown outcome is resolved by re-reading it (or by
  *   repeating the idempotent call), never by guessing.
  * - No Product price/currency: quantities come from the OrderItem snapshot only.
- * - No stock creation or adjustment: there is no `setStock`.
+ * - No stock creation or adjustment: there is no `setStock`. Those belong to
+ *   InventoryControlService and InventoryCountService.
  */
 class InventoryReservationService
 {
@@ -110,6 +121,7 @@ class InventoryReservationService
 
     public function __construct(
         private readonly OrderLineIntegrityChecker $orderLines = new OrderLineIntegrityChecker,
+        private readonly InventoryMovementWriter $movements = new InventoryMovementWriter,
     ) {}
 
     /**
@@ -149,8 +161,9 @@ class InventoryReservationService
     /**
      * Consumes the stock of every reserved line: `reserved -> committed`,
      * `on_hand` and `reserved` both drop by the line's quantity. All lines or
-     * none. Returns how many reservations actually changed — `0` for a
-     * repeated call (every line already committed), which has no stock effect.
+     * none, on the condition in the class docblock. Returns how many reservations
+     * actually changed — `0` for a repeated call (every line already committed),
+     * which has no stock effect.
      *
      * @throws InvalidReservationException if the Order has no reservations or any line is released
      * @throws InventoryIntegrityException if stored state contradicts itself
@@ -162,8 +175,9 @@ class InventoryReservationService
 
     /**
      * Gives every reserved line's hold back: `reserved -> released`, only
-     * `reserved_quantity` drops. All lines or none. Returns how many
-     * reservations actually changed — `0` for a repeated call.
+     * `reserved_quantity` drops. All lines or none, on the condition in the class
+     * docblock. Returns how many reservations actually changed — `0` for a
+     * repeated call.
      *
      * Nothing in production calls this today; see the class docblock. Whoever
      * first does must first resolve what a provider success arriving after the
@@ -415,33 +429,31 @@ class InventoryReservationService
     }
 
     /**
-     * The counter half of a transition this transaction just won. The
-     * predicates make a drifted counter refuse (rolling the whole transaction
-     * back, CAS included) instead of going negative or absorbing a bad state.
+     * The counter half of a transition this transaction just won, plus a
+     * commit's sale evidence. The predicates make a drifted counter refuse
+     * (rolling the whole transaction back, CAS included) instead of going
+     * negative or absorbing a bad state.
      */
     private function moveCounters(InventoryReservation $reservation, InventoryReservationStatus $target, mixed $now): void
     {
         $quantity = (int) $reservation->quantity;
         $inventoryId = (int) $reservation->inventory_id;
 
-        $query = DB::table('inventories')
-            ->where('id', $inventoryId)
-            ->where('reserved_quantity', '>=', $quantity);
-
+        // Commit also consumes on_hand, so it goes through the one writer that
+        // pairs an on_hand change with its movement (STOCK-01).
         if ($target === InventoryReservationStatus::Committed) {
-            $affected = $query
-                ->where('on_hand_quantity', '>=', $quantity)
-                ->update([
-                    'on_hand_quantity' => DB::raw('on_hand_quantity - '.$quantity),
-                    'reserved_quantity' => DB::raw('reserved_quantity - '.$quantity),
-                    'updated_at' => $now,
-                ]);
-        } else {
-            $affected = $query->update([
+            $this->movements->consumeReservation($reservation, $now);
+
+            return;
+        }
+
+        $affected = DB::table('inventories')
+            ->where('id', $inventoryId)
+            ->where('reserved_quantity', '>=', $quantity)
+            ->update([
                 'reserved_quantity' => DB::raw('reserved_quantity - '.$quantity),
                 'updated_at' => $now,
             ]);
-        }
 
         if ($affected !== 1) {
             Log::error('Inventory counters cannot absorb a reservation transition; rolled back.', [
@@ -497,33 +509,12 @@ class InventoryReservationService
     }
 
     /**
-     * MariaDB ships with `innodb_snapshot_isolation=ON` (no such setting on
-     * MySQL; PostgreSQL has no equivalent behavior either) — an optimistic
-     * check on locking reads that makes `SELECT ... FOR UPDATE` (both
-     * lockForUpdate() call sites above) fail with this exact error instead of
-     * blocking on the row lock, when the row was written by a transaction
-     * that committed after this one's snapshot was taken. Confirmed on real
-     * MariaDB 11.8.9 (`tests/Concurrency/InventoryMariadbConcurrencyTest.php`)
-     * — real MySQL 8.0.44 and PostgreSQL 16 do not exhibit it, confirmed on
-     * the same operations. MariaDB's own message names the correct remedy —
-     * restart the transaction — which is exactly what retrying
-     * DB::transaction() from scratch does (never resuming the failed one).
-     *
-     * Matched narrowly on SQLSTATE + driver code + both fixed phrases of
-     * MariaDB's own wording, not on driver/connection name alone: precise
-     * enough that this can never swallow a real error (a genuine deadlock,
-     * MySQL's own lock-wait-timeout, or anything else uses a different
-     * SQLSTATE/code/message and is rethrown unchanged).
+     * MariaDB's snapshot conflict on a locking read: see
+     * InventoryRetry::isMariadbSnapshotConflict(), the one narrow classifier
+     * every inventory operation shares.
      */
     private function isMariadbSnapshotConflict(QueryException $e): bool
     {
-        $sqlState = (string) ($e->errorInfo[0] ?? '');
-        $driverCode = $e->errorInfo[1] ?? null;
-        $message = $e->getMessage();
-
-        return $sqlState === 'HY000'
-            && $driverCode === 1020
-            && str_contains($message, 'Record has changed since last read')
-            && str_contains($message, 'try restarting transaction');
+        return InventoryRetry::isMariadbSnapshotConflict($e);
     }
 }

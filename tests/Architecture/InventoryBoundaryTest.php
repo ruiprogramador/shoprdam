@@ -17,16 +17,19 @@
  *
  * ## What these scans PROVE
  *
- * In the tree as written today: only InventoryReservationService touches the
- * `inventories`/`inventory_reservations` tables; no production code writes
- * either model through Eloquent; NO production code outside app/Domain/Inventory
- * references the inventory domain at all (so no controller, job, listener,
- * provider adapter, Payment/Wallet/Order-lifecycle code can reserve, commit or
- * release — which is what makes "PaymentAttempt failure / Order failed does not
- * release" a structural fact and not merely a tested behavior); the inventory
- * domain depends on no payment/wallet/provider/HTTP machinery and reads no
- * Product price/currency; its migrations use RESTRICT only; it contains no
- * delete/decrement/raw-DDL code and none of the concepts this branch excluded.
+ * In the tree as written today: each inventory table is touched through the
+ * query builder or raw SQL only by its exact canonical owner; no production code
+ * writes any inventory model through Eloquent; only InventoryMovementWriter
+ * changes `on_hand_quantity` or inserts a movement; NO production code outside
+ * app/Domain/Inventory references the inventory domain at all (so no controller,
+ * job, listener, provider adapter, Payment/Wallet/Order-lifecycle code can
+ * reserve, commit, release or touch stock — which is what makes "PaymentAttempt
+ * failure / Order failed does not release" a structural fact and not merely a
+ * tested behavior); physical counting has no production caller at all (STOCK-22);
+ * the inventory domain depends on no payment/wallet/provider/HTTP machinery and
+ * reads no Product price/currency; its migrations use RESTRICT only and reference
+ * no User; it contains no delete/decrement/raw-DDL code and none of the excluded
+ * concepts.
  *
  * ## What they do NOT prove
  *
@@ -93,14 +96,36 @@ function inventoryBoundaryLoad(array $roots): array
     return $files;
 }
 
-/** @return array<string, string> the two inventory migrations, by name */
+/** @return array<string, string> the inventory migrations, by name */
 function inventoryBoundaryMigrations(): array
 {
     return array_filter(
         inventoryBoundaryLoad(['database/migrations']),
-        fn ($code, $path) => str_contains($path, 'create_inventories_table') || str_contains($path, 'create_inventory_reservations_table'),
+        fn ($code, $path) => (bool) preg_match('/(create_inventories_table|create_inventory_(reservations|baselines|counts|movements)_table|add_is_baselined_to_inventories_table)/', $path),
         ARRAY_FILTER_USE_BOTH,
     );
+}
+
+/**
+ * Who may touch each inventory table through the query builder or raw SQL, and
+ * nobody else. The domain's other classes read through the models.
+ *
+ * @return array<string, list<string>>
+ */
+function inventoryBoundaryTableOwners(): array
+{
+    $reservations = 'app/Domain/Inventory/Services/InventoryReservationService.php';
+    $writer = 'app/Domain/Inventory/Services/InventoryMovementWriter.php';
+    $control = 'app/Domain/Inventory/Services/InventoryControlService.php';
+    $count = 'app/Domain/Inventory/Services/InventoryCountService.php';
+
+    return [
+        'inventories' => [$reservations, $writer, $control],
+        'inventory_reservations' => [$reservations],
+        'inventory_movements' => [$writer],
+        'inventory_counts' => [$count],
+        'inventory_baselines' => [$control],
+    ];
 }
 
 /** @return array<string, string> every file of the inventory domain */
@@ -121,7 +146,7 @@ function inventoryBoundaryDomain(): array
  * @param  list<string>  $allowed
  * @return list<string>
  */
-function inventoryBoundaryRawTableOffenders(array $files, array $allowed): array
+function inventoryBoundaryRawTableOffenders(array $files, array $allowed, string $tables = 'inventories|inventory_reservations|inventory_movements|inventory_counts|inventory_baselines'): array
 {
     $offenders = [];
 
@@ -130,8 +155,8 @@ function inventoryBoundaryRawTableOffenders(array $files, array $allowed): array
             continue;
         }
 
-        if (preg_match('/table\(\s*[\'"](inventories|inventory_reservations)[\'"]\s*\)/', $code)
-            || preg_match('/\b(insert\s+(or\s+\w+\s+)?into|update|delete\s+from|truncate(\s+table)?|drop\s+table(\s+if\s+exists)?|alter\s+table)\s+[`"\[\\\\]{0,2}(inventories|inventory_reservations)\b/i', $code)) {
+        if (preg_match('/table\(\s*[\'"]('.$tables.')[\'"]\s*\)/', $code)
+            || preg_match('/\b(insert\s+(or\s+\w+\s+)?into|update|delete\s+from|truncate(\s+table)?|drop\s+table(\s+if\s+exists)?|alter\s+table)\s+[`"\[\\\\]{0,2}('.$tables.')\b/i', $code)) {
             $offenders[] = $path;
         }
     }
@@ -140,10 +165,67 @@ function inventoryBoundaryRawTableOffenders(array $files, array $allowed): array
 }
 
 /**
- * Every eloquent-shaped way to write an Inventory or InventoryReservation:
- * static persistence calls, `new`, any mass write reached off a model chain,
- * and any write through the models' relations. No allowlist: the service
- * itself writes through the query builder, and the models refuse instances.
+ * Anything that could change `on_hand_quantity` or insert a movement, wherever it
+ * sits: only InventoryMovementWriter may, which is what makes STOCK-01 structural.
+ * Only a literal zero is exempt: that is createInventory() giving birth at 0/0.
+ *
+ * @param  array<string, string>  $files
+ * @param  list<string>  $allowed
+ * @return list<string>
+ */
+function inventoryBoundaryOnHandWriterOffenders(array $files, array $allowed): array
+{
+    $offenders = [];
+
+    foreach ($files as $path => $code) {
+        if (in_array($path, $allowed, true)) {
+            continue;
+        }
+
+        if (preg_match('/[\'"]on_hand_quantity[\'"]\s*=>\s*+(?!0\b|[\'"]integer[\'"])/', $code)
+            || preg_match('/\bset\s+[^;\'"]*on_hand_quantity\s*=/i', $code)
+            || preg_match('/table\(\s*[\'"]inventory_movements[\'"]\s*\)/', $code)) {
+            $offenders[] = $path;
+        }
+    }
+
+    return $offenders;
+}
+
+/**
+ * Callers of physical counting anywhere outside its own class: EMPTY, on purpose,
+ * and stricter than the general caller allowlist because the inventory domain's
+ * other classes are scanned too. STOCK-22: counting is implemented and proven, NOT
+ * activated. Detecting a physical discrepancy is not an operational feature until
+ * the selling policy for an open discrepancy (O-1) is decided and the commit-timing
+ * question behind O-8 is resolved (docs/inventory/INVENTORY-CONTROL.md §7.5).
+ *
+ * @param  array<string, string>  $files
+ * @param  list<string>  $allowed
+ * @return list<string>
+ */
+function inventoryBoundaryCountCallerOffenders(array $files, array $allowed): array
+{
+    $offenders = [];
+
+    foreach ($files as $path => $code) {
+        if ($path === 'app/Domain/Inventory/Services/InventoryCountService.php' || in_array($path, $allowed, true)) {
+            continue;
+        }
+
+        if (preg_match('/\bInventoryCountService\b|->\s*submitCount\s*\(/', $code)) {
+            $offenders[] = $path;
+        }
+    }
+
+    return $offenders;
+}
+
+/**
+ * Every eloquent-shaped way to write an inventory model: static persistence
+ * calls, `new`, any mass write reached off a model chain, and any write through
+ * the models' relations. No allowlist: the services write through the query
+ * builder, and the models refuse instances.
  *
  * @param  array<string, string>  $files
  * @return list<string>
@@ -152,11 +234,13 @@ function inventoryBoundaryEloquentWriteOffenders(array $files): array
 {
     $verbs = 'create|createMany|forceCreate|firstOrCreate|updateOrCreate|save|saveMany|insert|insertOrIgnore|insertGetId|upsert|update|updateOrInsert|delete|forceDelete|destroy|truncate|increment|decrement|incrementEach|decrementEach|touch';
 
+    $model = 'Inventory(Reservation|Movement|Count|Baseline)?';
+
     $patterns = [
-        '/\bInventory(Reservation)?::\s*(create|forceCreate|updateOrCreate|firstOrCreate|insert|insertOrIgnore|upsert|destroy|truncate|unguard|withoutEvents)\s*\(/',
-        '/\bnew\s+Inventory(Reservation)?\b/',
-        '/\bInventory(Reservation)?::[^;{}]*?->\s*('.$verbs.')\s*\(/',
-        '/->\s*(reservations|inventory)\s*\(\s*\)\s*->\s*('.$verbs.')\s*\(/',
+        '/\b'.$model.'::\s*(create|forceCreate|updateOrCreate|firstOrCreate|insert|insertOrIgnore|upsert|destroy|truncate|unguard|withoutEvents)\s*\(/',
+        '/\bnew\s+'.$model.'\b(?!Writer)/',
+        '/\b'.$model.'::[^;{}]*?->\s*('.$verbs.')\s*\(/',
+        '/->\s*(reservations|inventory|movements|counts|baseline|corrects|resolvedBy|reservation)\s*\(\s*\)\s*->\s*('.$verbs.')\s*\(/',
     ];
 
     $offenders = [];
@@ -190,7 +274,7 @@ function inventoryBoundaryHiddenStockOffenders(array $files): array
             continue;
         }
 
-        if (preg_match('/\b(on_hand_quantity|reserved_quantity|inventory_reservations|inventories)\b/', $code)) {
+        if (preg_match('/\b(on_hand_quantity|reserved_quantity|is_baselined|after_baseline|inventory_reservations|inventory_movements|inventory_counts|inventory_baselines|inventories)\b/', $code)) {
             $offenders[] = $path;
         }
     }
@@ -218,7 +302,7 @@ function inventoryBoundaryCallerOffenders(array $files, array $allowed): array
             continue;
         }
 
-        if (preg_match('/Domain\\\\Inventory\b|\bInventory(Reservation(Service|Status)?|IntegrityChecker)?\b/', $code)) {
+        if (preg_match('/Domain\\\\Inventory\b|\bInventory(Reservation(Service|Status)?|IntegrityChecker|Movement(Writer|Reason)?|Control(Service)?|Count(Service|Status)?|Baseline(Kind)?)?\b/', $code)) {
             $offenders[] = $path;
         }
     }
@@ -267,9 +351,9 @@ function inventoryBoundaryDependencyOffenders(array $files): array
 function inventoryBoundaryForbiddenConceptOffenders(array $files): array
 {
     $forbidden = [
-        'sku', 'variant', 'warehouse', 'location', 'supplier', 'procurement', 'purchase_order', 'receipt', 'lot', 'batch', 'serial',
+        'sku', 'variant', 'warehouse', 'location', 'supplier', 'procurement', 'purchase_order', 'lot', 'batch', 'serial',
         'backorder', 'preorder', 'safety_stock', 'expires_at', 'expired', 'expiry', 'cancelled', 'cancellation', 'fulfil', 'fulfilment', 'fulfillment',
-        'shipping', 'refund', 'setStock', 'set_stock', 'adjust',
+        'shipping', 'refund', 'setStock', 'set_stock', 'adjust', 'restock', 'opening_balance', 'incrementStock', 'decrementStock',
     ];
 
     $offenders = [];
@@ -316,7 +400,8 @@ function inventoryBoundaryForbiddenShapeOffenders(array $files): array
 
 /**
  * Every FK in the inventory migrations is RESTRICT; no CASCADE, no nullOnDelete,
- * no soft deletes (INVENTORY-18).
+ * no soft deletes (INVENTORY-18, STOCK-14); and no FK reaches `users`, so deleting
+ * a User neither destroys nor mutates stock history.
  *
  * @param  array<string, string>  $migrations
  * @return list<string>
@@ -333,6 +418,10 @@ function inventoryBoundaryMigrationOffenders(array $migrations): array
         if (substr_count($code, '->constrained(') !== substr_count($code, '->restrictOnDelete()')) {
             $offenders[] = "{$path} has a foreign key that is not restrictOnDelete()";
         }
+
+        if (preg_match('/constrained\(\s*[\'"]users[\'"]|foreignId\(\s*[\'"](actor_user_id|user_id)[\'"]|references\(\s*[\'"]id[\'"]\s*\)\s*->\s*on\(\s*[\'"]users[\'"]/', $code)) {
+            $offenders[] = "{$path} ties stock history to the existence of a User";
+        }
     }
 
     return $offenders;
@@ -342,14 +431,36 @@ function inventoryBoundaryMigrationOffenders(array $migrations): array
 function inventoryBoundaryExpectedDomainFiles(): array
 {
     return [
+        'app/Domain/Inventory/DTOs/CountResult.php',
+        'app/Domain/Inventory/DTOs/LockedInventory.php',
+        'app/Domain/Inventory/DTOs/MovementDraft.php',
+        'app/Domain/Inventory/DTOs/MovementResult.php',
+        'app/Domain/Inventory/DTOs/StoreOwnerActor.php',
+        'app/Domain/Inventory/Enums/InventoryActorType.php',
+        'app/Domain/Inventory/Enums/InventoryBaselineKind.php',
+        'app/Domain/Inventory/Enums/InventoryCountStatus.php',
+        'app/Domain/Inventory/Enums/InventoryMovementReason.php',
         'app/Domain/Inventory/Enums/InventoryReservationStatus.php',
         'app/Domain/Inventory/Exceptions/InsufficientStockException.php',
+        'app/Domain/Inventory/Exceptions/InvalidInventoryOperationException.php',
         'app/Domain/Inventory/Exceptions/InvalidReservationException.php',
+        'app/Domain/Inventory/Exceptions/InventoryIdempotencyConflictException.php',
         'app/Domain/Inventory/Exceptions/InventoryIntegrityException.php',
+        'app/Domain/Inventory/Exceptions/InventoryNotBaselinedException.php',
+        'app/Domain/Inventory/Exceptions/InventoryQuantityCeilingException.php',
         'app/Domain/Inventory/Models/Inventory.php',
+        'app/Domain/Inventory/Models/InventoryBaseline.php',
+        'app/Domain/Inventory/Models/InventoryCount.php',
+        'app/Domain/Inventory/Models/InventoryMovement.php',
         'app/Domain/Inventory/Models/InventoryReservation.php',
+        'app/Domain/Inventory/Services/InventoryControlService.php',
+        'app/Domain/Inventory/Services/InventoryCountService.php',
         'app/Domain/Inventory/Services/InventoryIntegrityChecker.php',
+        'app/Domain/Inventory/Services/InventoryMovementWriter.php',
         'app/Domain/Inventory/Services/InventoryReservationService.php',
+        'app/Domain/Inventory/Support/InventoryInput.php',
+        'app/Domain/Inventory/Support/InventoryRetry.php',
+        'app/Domain/Inventory/Support/InventoryTarget.php',
     ];
 }
 
@@ -364,13 +475,48 @@ it('scans a non-vacuous production tree and exactly the expected inventory domai
 
     expect(count($production))->toBeGreaterThan(100)
         ->and($domain)->toBe(inventoryBoundaryExpectedDomainFiles())
-        ->and(array_keys(inventoryBoundaryMigrations()))->toHaveCount(2);
+        ->and(array_keys(inventoryBoundaryMigrations()))->toHaveCount(6);
 });
 
-it('lets only InventoryReservationService touch the inventory tables through the query builder or raw SQL (INVENTORY-19)', function () {
-    $allowed = ['app/Domain/Inventory/Services/InventoryReservationService.php'];
+it('lets each inventory table be touched through the query builder or raw SQL only by its exact canonical owner (INVENTORY-19, STOCK-01)', function () {
+    $production = inventoryBoundaryLoad(inventoryBoundaryProductionRoots());
 
-    expect(inventoryBoundaryRawTableOffenders(inventoryBoundaryLoad(inventoryBoundaryProductionRoots()), $allowed))->toBe([]);
+    foreach (inventoryBoundaryTableOwners() as $table => $owners) {
+        expect(inventoryBoundaryRawTableOffenders($production, $owners, $table))->toBe([], $table);
+    }
+});
+
+it('lets only InventoryMovementWriter change on_hand_quantity or insert a movement, so neither can exist without the other (STOCK-01)', function () {
+    $allowed = ['app/Domain/Inventory/Services/InventoryMovementWriter.php'];
+
+    expect(inventoryBoundaryOnHandWriterOffenders(inventoryBoundaryLoad(inventoryBoundaryProductionRoots()), $allowed))->toBe([]);
+});
+
+it('keeps every physical-count caller out of production: STOCK-22, implemented and proven, NOT activated', function () {
+    $allowedCallers = []; // adding one is a deliberate change that must cite the O-1 decision and O-8 (docs/inventory/INVENTORY-CONTROL.md §7.5)
+
+    $tree = [...inventoryBoundaryLoad(inventoryBoundaryProductionRoots()), ...inventoryBoundaryLoad(['resources'])];
+
+    expect(inventoryBoundaryCountCallerOffenders($tree, $allowedCallers))->toBe([]);
+});
+
+it('keeps Inventory writes behind the three canonical services: the writer is called only by them (STOCK-01)', function () {
+    $canonical = [
+        'app/Domain/Inventory/Services/InventoryReservationService.php',
+        'app/Domain/Inventory/Services/InventoryControlService.php',
+        'app/Domain/Inventory/Services/InventoryCountService.php',
+    ];
+
+    $callers = array_keys(array_filter(
+        inventoryBoundaryLoad(['app']),
+        fn ($code, $path) => $path !== 'app/Domain/Inventory/Services/InventoryMovementWriter.php' && str_contains($code, 'InventoryMovementWriter'),
+        ARRAY_FILTER_USE_BOTH,
+    ));
+
+    sort($callers);
+    sort($canonical);
+
+    expect($callers)->toBe($canonical);
 });
 
 it('lets no production code write Inventory or InventoryReservation through Eloquent (INVENTORY-19)', function () {
@@ -382,7 +528,10 @@ it('keeps the stock columns and tables out of every file outside the inventory d
 });
 
 it('has NO production caller of the inventory domain: nothing reserves, commits or releases from a controller, job, listener, provider adapter or the Payment/Wallet/Order-lifecycle code (INVENTORY-13/14/16)', function () {
-    $allowedCallers = []; // wiring inventory to any trigger is a decision (design §12) — change this on purpose, with tests
+    // Wiring inventory to any trigger is a decision (design §12), and it is blocked
+    // until composing these operations in a caller's transaction has a verifiable
+    // strategy (docs/inventory/INVENTORY-CONTROL.md §24.7) — change this on purpose, with tests.
+    $allowedCallers = [];
 
     expect(inventoryBoundaryCallerOffenders(inventoryBoundaryLoad(inventoryBoundaryProductionRoots()), $allowedCallers))->toBe([]);
 });
@@ -420,6 +569,8 @@ it('keeps the load-bearing statements of the reservation service in place (INVEN
         ->and($compact)->toContain('Inventory::query()->whereKey($inventoryId)->lockForUpdate()')
         ->and($compact)->toContain('Inventory::query()->whereKey($reservation->inventory_id)->lockForUpdate()')
         ->and($compact)->toContain('->whereKey($reservationId)->lockForUpdate()')
+        // commit's on_hand change goes through the one writer that pairs it with its movement
+        ->and($compact)->toContain('$this->movements->consumeReservation($reservation,$now)')
         // one transaction per operation, deterministic lock order — one
         // `DB::transaction(` call site in reserve() and one in settle(),
         // each now inside a small bounded retry loop (MariaDB's
@@ -433,6 +584,53 @@ it('keeps the load-bearing statements of the reservation service in place (INVEN
         // no read-modify-write of a stock number
         ->and($code)->not->toMatch('/->(on_hand_quantity|reserved_quantity)\s*[-+]?=/')
         ->and($code)->not->toMatch('/\$\w+->(on_hand_quantity|reserved_quantity)\s*(>=|>|<=|<)\s*\$/');
+});
+
+it('keeps the load-bearing statements of the movement writer in place (STOCK-01/05/06/09/11)', function () {
+    $code = inventoryBoundaryDomain()['app/Domain/Inventory/Services/InventoryMovementWriter.php'];
+    $compact = preg_replace('/\s+/', '', $code);
+
+    // every guard is the predicate of one conditional UPDATE
+    expect($compact)->toContain("->where('on_hand_quantity','<=',self::MAX_ON_HAND-\$quantity)")
+        ->and($compact)->toContain("->whereRaw('on_hand_quantity-reserved_quantity>=?',[\$quantity])")
+        ->and($compact)->toContain("->where('on_hand_quantity',\$expected)->where('reserved_quantity','<=',\$observed)")
+        ->and($compact)->toContain("->where('reserved_quantity','>=',\$quantity)->where('on_hand_quantity','>=',\$quantity)")
+        ->and(substr_count($code, "DB::table('inventories')"))->toBe(4)
+        ->and(substr_count($code, "DB::table('inventory_movements')"))->toBe(1)
+        // the row lock, and the locking read that sources a sale's after_baseline stamp
+        ->and(substr_count($code, 'lockForUpdate()'))->toBe(2)
+        ->and($compact)->toContain("->lockForUpdate()->toBase()->value('is_baselined')")
+        ->and($compact)->toContain("'after_baseline'=>\$isBaselined")
+        // a transaction is asserted, never assumed
+        ->and(substr_count($code, '$this->assertInTransaction();'))->toBe(4)
+        // a lost sale identity is corruption: thrown, never replayed
+        ->and($code)->toContain('InventoryIntegrityException::duplicateSaleEvidence')
+        // no read-modify-write of a stock number
+        ->and($code)->not->toMatch('/\$\w+->(onHand|reserved|on_hand_quantity|reserved_quantity)\s*(>=|>|<=|<)\s*\$/');
+});
+
+it('keeps the load-bearing statements of the control and count services in place (STOCK-03/06/07/11)', function () {
+    $control = inventoryBoundaryDomain()['app/Domain/Inventory/Services/InventoryControlService.php'];
+    $count = inventoryBoundaryDomain()['app/Domain/Inventory/Services/InventoryCountService.php'];
+    $compact = preg_replace('/\s+/', '', $count);
+
+    expect($control)->toContain("->where('is_baselined', false)")
+        ->and($control)->toContain("'is_baselined' => true")
+        ->and(substr_count($control, "'is_baselined' => true"))->toBe(2)
+        ->and($control)->toContain('$this->movements->lock($inventoryId)')
+        ->and($control)->toContain('throw InventoryIdempotencyConflictException::forKey')
+        ->and($control)->not->toContain('movement_sum')
+        ->and($count)->toContain('$this->movements->lock($inventoryId)')
+        // the status comes from the locked row, stale first
+        ->and($compact)->toContain('$locked->onHand!==$expected=>InventoryCountStatus::Stale')
+        ->and($compact)->toContain('$observed<$locked->reserved=>InventoryCountStatus::DiscrepancyOpen')
+        // the one permitted change of a count row is a compare-and-set
+        ->and($compact)->toContain("->where('status',InventoryCountStatus::DiscrepancyOpen->value)")
+        ->and(substr_count($count, "DB::table('inventory_counts')"))->toBe(2);
+
+    foreach ([$control, $count] as $code) {
+        expect($code)->not->toMatch('/->\s*(release|commit|reserve)\s*\(/');
+    }
 });
 
 it('keeps every reservation status change behind the state machine, never an arbitrary assignment (INVENTORY-08/09)', function () {
@@ -479,6 +677,46 @@ it('[self-test] the raw-table detector flags the builder and raw SQL outside the
     expect(inventoryBoundaryRawTableOffenders($files, ['app/OK.php']))->toBe(['app/A.php', 'app/B.php', 'app/C.php', 'app/D.php']);
 });
 
+it('[self-test] the raw-table detector honors a per-table allowlist', function () {
+    $files = [
+        'app/Writer.php' => "<?php DB::table('inventory_movements')->insert([]);",
+        'app/Other.php' => '<?php DB::statement("INSERT INTO inventory_counts VALUES (1)");',
+    ];
+
+    expect(inventoryBoundaryRawTableOffenders($files, ['app/Writer.php'], 'inventory_movements'))->toBe([])
+        ->and(inventoryBoundaryRawTableOffenders($files, [], 'inventory_movements'))->toBe(['app/Writer.php'])
+        ->and(inventoryBoundaryRawTableOffenders($files, ['app/Writer.php']))->toBe(['app/Other.php']);
+});
+
+it('[self-test] the on-hand writer detector flags a second writer of on_hand or of movements, and not the allowlisted one or the creation at zero', function () {
+    $files = [
+        'app/A.php' => "<?php DB::table('x')->update(['on_hand_quantity' => DB::raw('on_hand_quantity + 1')]);",
+        'app/B.php' => '<?php DB::update("UPDATE x SET on_hand_quantity = 5");',
+        'app/C.php' => "<?php DB::table('inventory_movements')->insert([]);",
+        'app/Writer.php' => "<?php DB::table('inventory_movements')->insert([]);",
+        'app/Create.php' => "<?php \$row = ['on_hand_quantity' => 0, 'reserved_quantity' => 0];",
+        'app/Cast.php' => "<?php \$casts = ['on_hand_quantity' => 'integer'];",
+        'app/Read.php' => "<?php \$q->first(['id', 'on_hand_quantity']);",
+    ];
+
+    expect(inventoryBoundaryOnHandWriterOffenders($files, ['app/Writer.php']))->toBe(['app/A.php', 'app/B.php', 'app/C.php']);
+});
+
+it('[self-test] the count-caller detector flags every way of reaching physical counting, and honors an exact allowlist', function () {
+    $files = [
+        'app/Http/Controllers/CountController.php' => '<?php use App\Domain\Inventory\Services\InventoryCountService;',
+        'routes/web.php' => '<?php Route::post("/count", [InventoryCountService::class, "submitCount"]);',
+        'app/Jobs/C.php' => '<?php $service->submitCount($p, 1, 1, "k", $a);',
+        'app/Domain/Inventory/Services/Sneaky.php' => '<?php app(InventoryCountService::class);',
+        'app/Domain/Inventory/Services/InventoryCountService.php' => '<?php class InventoryCountService { public function submitCount() {} }',
+        'app/Fine.php' => '<?php $count = $inventoryCount + 1;',
+    ];
+
+    expect(inventoryBoundaryCountCallerOffenders($files, []))->toBe([
+        'app/Http/Controllers/CountController.php', 'routes/web.php', 'app/Jobs/C.php', 'app/Domain/Inventory/Services/Sneaky.php',
+    ])->and(inventoryBoundaryCountCallerOffenders($files, ['app/Jobs/C.php']))->not->toContain('app/Jobs/C.php');
+});
+
 it('[self-test] the Eloquent-write detector flags every write shape and ignores reads', function () {
     $bad = [
         '<?php Inventory::create([]);',
@@ -491,6 +729,13 @@ it('[self-test] the Eloquent-write detector flags every write shape and ignores 
         '<?php $product->inventory()->update([]);',
         '<?php $inventory->reservations()->create([]);',
         '<?php Inventory::withoutEvents(fn () => 1);',
+        '<?php InventoryMovement::create([]);',
+        '<?php $x = new InventoryCount;',
+        '<?php InventoryBaseline::query()->where("id", 1)->update([]);',
+        '<?php InventoryMovement::whereKey(1)->delete();',
+        '<?php $inventory->movements()->create([]);',
+        '<?php $inventory->baseline()->update([]);',
+        '<?php $count->resolvedBy()->delete();',
     ];
 
     foreach ($bad as $i => $code) {
@@ -502,6 +747,8 @@ it('[self-test] the Eloquent-write detector flags every write shape and ignores 
         '<?php InventoryReservation::query()->whereKey(1)->lockForUpdate()->toBase()->value("status");',
         '<?php $s = InventoryReservationStatus::Reserved->value;',
         '<?php $item->inventory;',
+        '<?php InventoryMovement::query()->where("inventory_id", 1)->first();',
+        '<?php private readonly InventoryMovementWriter $movements = new InventoryMovementWriter;',
     ];
 
     foreach ($good as $i => $code) {
@@ -515,9 +762,11 @@ it('[self-test] the hidden-stock detector flags a stock column or table outside 
         'app/Models/Y.php' => "<?php \$t = 'inventories';",
         'app/Domain/Inventory/Services/Z.php' => "<?php \$t = 'inventories';",
         'app/Other.php' => '<?php $x = 1;',
+        'app/Http/M.php' => "<?php DB::table('inventory_movements')->get();",
+        'app/Http/F.php' => "<?php \$q->where('is_baselined', true);",
     ];
 
-    expect(inventoryBoundaryHiddenStockOffenders($files))->toBe(['app/Http/X.php', 'app/Models/Y.php']);
+    expect(inventoryBoundaryHiddenStockOffenders($files))->toBe(['app/Http/X.php', 'app/Models/Y.php', 'app/Http/M.php', 'app/Http/F.php']);
 });
 
 it('[self-test] the caller detector flags every way of reaching the domain from outside, and honors an exact allowlist', function () {
@@ -526,11 +775,12 @@ it('[self-test] the caller detector flags every way of reaching the domain from 
         'app/Listeners/B.php' => '<?php app(InventoryReservationService::class)->release($o);',
         'app/Jobs/C.php' => '<?php (new InventoryIntegrityChecker)->audit();',
         'app/Payments/D.php' => '<?php Inventory::query()->first();',
+        'app/Http/E.php' => '<?php app(InventoryControlService::class)->receive($p, 1, "k", $a, "n");',
         'app/Domain/Inventory/Services/Inside.php' => '<?php InventoryReservation::query();',
         'app/Fine.php' => '<?php $inventoryCount = 1; // no class reference',
     ];
 
-    expect(inventoryBoundaryCallerOffenders($files, []))->toBe(['app/Http/A.php', 'app/Listeners/B.php', 'app/Jobs/C.php', 'app/Payments/D.php'])
+    expect(inventoryBoundaryCallerOffenders($files, []))->toBe(['app/Http/A.php', 'app/Listeners/B.php', 'app/Jobs/C.php', 'app/Payments/D.php', 'app/Http/E.php'])
         ->and(inventoryBoundaryCallerOffenders($files, ['app/Http/A.php']))->not->toContain('app/Http/A.php');
 });
 
@@ -549,7 +799,7 @@ it('[self-test] the dependency detector flags payment, wallet, HTTP and money-fi
 });
 
 it('[self-test] the forbidden-concept detector flags each excluded concept and ignores unrelated words', function () {
-    foreach (['sku', 'variant', 'warehouse', 'supplier', 'backorder', 'expires_at', 'cancelled', 'fulfilment', 'setStock', 'adjust', 'lot', 'batch'] as $needle) {
+    foreach (['sku', 'variant', 'warehouse', 'supplier', 'backorder', 'expires_at', 'cancelled', 'fulfilment', 'setStock', 'adjust', 'lot', 'batch', 'restock', 'opening_balance'] as $needle) {
         expect(inventoryBoundaryForbiddenConceptOffenders(['f.php' => "<?php \$x = '{$needle}';"]))->not->toBe([], $needle);
     }
 
@@ -576,5 +826,7 @@ it('[self-test] the migration detector flags CASCADE, nullOnDelete, softDeletes 
         ->and(inventoryBoundaryMigrationOffenders(['c' => "<?php \$t->foreignId('a')->constrained()->cascadeOnDelete();"]))->not->toBe([])
         ->and(inventoryBoundaryMigrationOffenders(['n' => "<?php \$t->foreignId('a')->constrained()->nullOnDelete();"]))->not->toBe([])
         ->and(inventoryBoundaryMigrationOffenders(['s' => '<?php $t->softDeletes();']))->not->toBe([])
-        ->and(inventoryBoundaryMigrationOffenders(['d' => "<?php \$t->foreignId('a')->constrained();"]))->not->toBe([]);
+        ->and(inventoryBoundaryMigrationOffenders(['d' => "<?php \$t->foreignId('a')->constrained();"]))->not->toBe([])
+        ->and(inventoryBoundaryMigrationOffenders(['u' => "<?php \$t->foreignId('actor_user_id')->constrained('users')->restrictOnDelete();"]))->not->toBe([])
+        ->and(inventoryBoundaryMigrationOffenders(['s' => "<?php \$t->unsignedBigInteger('actor_user_id');"]))->toBe([]);
 });

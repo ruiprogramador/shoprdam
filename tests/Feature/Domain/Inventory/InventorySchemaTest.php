@@ -35,9 +35,17 @@ function isFixture(): array
 
 it('has exactly the approved minimal columns — no warehouse, sku, variant, supplier, lot, expiry or backorder', function () {
     expect(Schema::getColumnListing('inventories'))->toBe([
-        'id', 'product_id', 'on_hand_quantity', 'reserved_quantity', 'created_at', 'updated_at',
+        'id', 'product_id', 'on_hand_quantity', 'reserved_quantity', 'created_at', 'updated_at', 'is_baselined',
     ])->and(Schema::getColumnListing('inventory_reservations'))->toBe([
         'id', 'inventory_id', 'order_item_id', 'quantity', 'status', 'committed_at', 'released_at', 'created_at', 'updated_at',
+    ])->and(Schema::getColumnListing('inventory_baselines'))->toBe([
+        'id', 'inventory_id', 'kind', 'on_hand_at_baseline', 'reserved_at_baseline', 'actor_type', 'actor_user_id', 'note', 'created_at',
+    ])->and(Schema::getColumnListing('inventory_counts'))->toBe([
+        'id', 'inventory_id', 'idempotency_key', 'expected_on_hand', 'observed_quantity', 'on_hand_at_submission', 'reserved_at_submission',
+        'status', 'resolved_by_count_id', 'resolved_at', 'actor_type', 'actor_user_id', 'note', 'created_at',
+    ])->and(Schema::getColumnListing('inventory_movements'))->toBe([
+        'id', 'inventory_id', 'reason', 'quantity_delta', 'idempotency_key', 'reservation_id', 'count_id', 'corrects_movement_id',
+        'actor_type', 'actor_user_id', 'note', 'after_baseline', 'created_at',
     ]);
 
     // available is derived, never stored.
@@ -77,7 +85,7 @@ it('INVENTORY-01: the database refuses negative or over-reserved counters, howev
     ];
 
     foreach ($refused as $label => $attempt) {
-        expect($attempt)->toThrow(QueryException::class);
+        expectDatabaseRefusal($attempt);
     }
 
     expect(inventoryState($product))->toBe(['on_hand' => 5, 'reserved' => 2, 'available' => 3]);
@@ -109,7 +117,7 @@ it('constrains reservations: unique order item, positive quantity, a known statu
     ];
 
     foreach ($refused as $label => $attempt) {
-        expect($attempt)->toThrow(QueryException::class);
+        expectDatabaseRefusal($attempt);
     }
 
     // Complete, coherent terminal rows are accepted.

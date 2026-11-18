@@ -2,6 +2,8 @@
 
 use App\Domain\Catalog\Models\Product;
 use App\Domain\Catalog\Services\ProductService;
+use App\Domain\Inventory\DTOs\StoreOwnerActor;
+use App\Domain\Inventory\Services\InventoryControlService;
 use App\Domain\Orders\Services\OrderCreationService;
 use App\Domain\Wallet\WalletTransactionReference;
 use App\Models\Order;
@@ -286,7 +288,11 @@ function inventoryProduct(Store $store, string $price = '10.00', string $name = 
     );
 }
 
-/** Seeds one Inventory row for the Product and returns its id. */
+/**
+ * Seeds one Inventory row for the Product and returns its id: a raw write, so it
+ * produces an unbaselined legacy row (`is_baselined = false`), a legitimate state
+ * that every reservation test exercises. inventoryGenesis() is the canonical birth.
+ */
 function inventorySeed(Product|int $product, int $onHand, int $reserved = 0): int
 {
     return DB::table('inventories')->insertGetId([
@@ -310,6 +316,38 @@ function inventoryState(Product|int $product): array
         'reserved' => (int) $row->reserved_quantity,
         'available' => (int) $row->on_hand_quantity - (int) $row->reserved_quantity,
     ];
+}
+
+/** A statement as the default suite's grammar quotes it, whichever engine actually ran it. */
+function inventorySql(string $sql): string
+{
+    return str_replace('`', '"', $sql);
+}
+
+/** The owner of the Store that owns the Product: the only actor a control operation accepts. */
+function inventoryActor(Product $product): StoreOwnerActor
+{
+    return new StoreOwnerActor((int) DB::table('stores')->where('id', $product->store_id)->value('user_id'));
+}
+
+/**
+ * The canonical birth of an Inventory, then an evidenced first receipt.
+ *
+ * @return array{0: Product, 1: int} the Product and its Inventory id
+ */
+function inventoryGenesis(Store $store, int $stock = 0, string $name = 'Widget'): array
+{
+    $product = inventoryProduct($store, '10.00', $name);
+    $actor = inventoryActor($product);
+    $service = app(InventoryControlService::class);
+
+    $inventory = $service->createInventory($product, $actor);
+
+    if ($stock > 0) {
+        $service->receive($product, $stock, 'opening-'.$product->id, $actor, 'first delivery');
+    }
+
+    return [$product, (int) $inventory->id];
 }
 
 /** @param  array<int, array{0: Product, 1: int}>  $pairs */

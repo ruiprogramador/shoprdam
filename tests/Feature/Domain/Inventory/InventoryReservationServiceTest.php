@@ -733,10 +733,11 @@ it('Q: every inventory foreign key is RESTRICT and the database refuses to delet
     $order = inventoryOrder($store, [[$product, 1]]);
     invService()->reserve($order);
 
-    expect(fn () => DB::table('inventories')->where('id', $inventoryId)->delete())->toThrow(QueryException::class)
-        ->and(fn () => DB::table('order_items')->where('order_id', $order->id)->delete())->toThrow(QueryException::class)
-        ->and(fn () => DB::table('orders')->where('id', $order->id)->delete())->toThrow(QueryException::class)
-        ->and(invReservationCount())->toBe(1);
+    expectDatabaseRefusal(fn () => DB::table('inventories')->where('id', $inventoryId)->delete());
+    expectDatabaseRefusal(fn () => DB::table('order_items')->where('order_id', $order->id)->delete());
+    expectDatabaseRefusal(fn () => DB::table('orders')->where('id', $order->id)->delete());
+
+    expect(invReservationCount())->toBe(1);
 });
 
 it('terminal reservations survive as evidence — release/commit never delete a row', function () {

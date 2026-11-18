@@ -14,12 +14,12 @@ support and fresh-install/baseline status are tracked in
 | | |
 |---|---|
 | Implemented | one `Inventory` row per Product; one `InventoryReservation` per OrderItem; `InventoryReservationService::{reserve, commit, release}` (order-level, all-or-nothing, idempotent); read-only `InventoryIntegrityChecker`; DB constraints; model guards; architecture scans |
-| **Not** implemented (deliberately) | automatic **expiry** (no `expires_at`, no worker, no config); **payment integration** (nothing commits or releases on any payment event); **Order-creation integration**; cancellation; stock creation/adjustment in production; any UI |
+| **Not** implemented (deliberately) | automatic **expiry** (no `expires_at`, no worker, no config); **payment integration** (nothing commits or releases on any payment event); **Order-creation integration**; cancellation; any UI. Stock creation and control are a separate contract with no production caller either: `docs/inventory/INVENTORY-CONTROL.md` |
 | Why the last three | §12 (late payment after release) and §13 (no safe commit point) — each is an unresolved product/financial decision, not an implementation detail |
-| Production effect today | **none.** No production code can create stock (`no setStock`), and nothing calls the service (an empty caller allowlist is asserted by `InventoryBoundaryTest`). This branch establishes the inventory *domain contract*; wiring it is a decision (§12, §18) |
+| Production effect today | **none.** Nothing calls the service (an empty caller allowlist is asserted by `InventoryBoundaryTest`), and there is no `setStock`. This branch establishes the inventory *domain contract*; wiring it is a decision (§12, §18) |
 | Payment/Wallet/Order-lifecycle code changed | **no** — zero lines |
 | Real-engine proof | **Historical (this branch):** MySQL 8.0.30 / InnoDB / REPEATABLE READ, proven with independent OS-process connections (`tests/Concurrency`, §11); it found and fixed two real InnoDB deadlocks invisible on SQLite. **Current:** proven on MySQL, MariaDB and PostgreSQL at each engine's default isolation level — see `docs/architecture/DATABASE-SUPPORT.md` §6. Non-default isolation levels: not run |
-| What this branch is | a *reservation-domain* contract that is correct on the engines it has been proven on (`docs/architecture/DATABASE-SUPPORT.md` §6). It is **not** an operational inventory system: no stock creation, no stock control, no callers, no expiry, no payment/checkout wiring (§21) |
+| What this branch is | a *reservation-domain* contract that is correct on the engines it has been proven on (`docs/architecture/DATABASE-SUPPORT.md` §6). It is **not** an operational inventory system: no callers, no expiry, no payment/checkout wiring (§21) |
 
 ## 1. Audit findings (before any change)
 
@@ -95,13 +95,13 @@ on_hand_quantity   = initial − Σ quantity of reservations with status 'commit
 0 ≤ reserved_quantity ≤ on_hand_quantity
 ```
 
-The second line holds **only in the current implementation**, where `commit` is the only operation that changes `on_hand_quantity` and `initial` is whatever a raw seed wrote (§10). It is not a universal law of the domain. `docs/inventory/INVENTORY-CONTROL.md` (design only, not implemented) proposes receipts, write-offs, corrections and counts, which make `on_hand` move otherwise. That document replaces this line with a baseline-plus-movements equation (its §15). The first and third lines are unaffected.
+The second line is **not** a law of the domain: it holds only for an Inventory that no control operation has touched, with `initial` being whatever a raw seed wrote (§10). Receipts, write-offs, corrections and counts also move `on_hand` (`docs/inventory/INVENTORY-CONTROL.md`), and for an Inventory with a baseline the equation is that document's §15: `on_hand = on_hand_at_baseline + Σ quantity_delta WHERE after_baseline`. The first and third lines hold everywhere.
 
 The last line is a **database CHECK** (§5), and `reserve` cannot produce a violation because of the predicate (§7). `InventoryIntegrityCheckerTest` runs a 120-step deterministic sequence of reserve/commit/release checking every equation after every step.
 
 ## 4. Schema
 
-`inventories`: `id`, `product_id` (FK RESTRICT, unique), `on_hand_quantity` bigint, `reserved_quantity` bigint default 0, timestamps.
+`inventories`: `id`, `product_id` (FK RESTRICT, unique), `on_hand_quantity` bigint, `reserved_quantity` bigint default 0, timestamps; plus `is_baselined` boolean NOT NULL DEFAULT false, added by `feat/inventory-control` (`docs/inventory/INVENTORY-CONTROL.md` §4.1).
 `inventory_reservations`: `id`, `inventory_id` (FK RESTRICT), `order_item_id` (FK RESTRICT, unique), `quantity` int, `status` varchar(16), `committed_at`, `released_at`, timestamps; index `(inventory_id, status)`.
 
 * Columns are **signed** on purpose: MySQL evaluates `unsigned − unsigned` as `BIGINT UNSIGNED` and errors instead of yielding a negative, which would turn the availability predicate into an exception. Non-negativity is a CHECK.
@@ -133,7 +133,7 @@ Reserved ──commit──▶ Committed   (terminal)
 
 ## 7. Canonical service and the concurrency mechanism
 
-`App\Domain\Inventory\Services\InventoryReservationService` is the only writer. Operations are **order-level**: they act on every line of an Order inside one transaction.
+`App\Domain\Inventory\Services\InventoryReservationService` is the only writer of reservations and of `reserved_quantity`, with one exception: a commit's counter statement lives in `InventoryMovementWriter`, which pairs it with the sale evidence (`docs/inventory/INVENTORY-CONTROL.md` §6.4). Operations are **order-level**: they act on every line of an Order inside one transaction.
 
 ### Reserve (INVENTORY-01/02/03/04/05)
 
@@ -166,7 +166,7 @@ UPDATE inventory_reservations SET status = :target, <committed_at|released_at> =
 ```
 
 Exactly one concurrent caller sees `1` row; only it then moves the counters (in the same transaction):
-release `reserved −= q WHERE reserved ≥ q`; commit `on_hand −= q, reserved −= q WHERE reserved ≥ q AND on_hand ≥ q`. A counter that cannot absorb the change (drift) makes the statement affect 0 rows → `InventoryIntegrityException` → the CAS rolls back with it.
+release `reserved −= q WHERE reserved ≥ q`; commit `on_hand −= q, reserved −= q WHERE reserved ≥ q AND on_hand ≥ q`, followed by its `sale` movement in the same transaction. A counter that cannot absorb the change (drift) makes the statement affect 0 rows → `InventoryIntegrityException` → the CAS rolls back with it.
 
 A loser sees `0`, re-reads the row with `lockForUpdate()` (a *current* read — under MySQL REPEATABLE READ a plain SELECT could still show the pre-winner snapshot) and: same-state ⇒ idempotent no-op; different terminal state ⇒ `InvalidReservationException`; unknown value ⇒ `InventoryIntegrityException`. Inventory protects itself: it does not rely on provider-event idempotency or a caller never retrying.
 
@@ -174,13 +174,15 @@ A loser sees `0`, re-reads the row with `lockForUpdate()` (a *current* read — 
 
 One lock hierarchy everywhere: the **Inventory row first, then its reservation rows**, and lines always in ascending **(inventory id, order item id)**, in every operation. Two multi-line operations therefore acquire inventory rows in the same global order and cannot wait on each other in a cycle. Order-level commit/release also refuse (rolling everything back) if any line is in a conflicting state or the Order is only partially reserved.
 
+**Multi-line atomicity has a condition.** Lines lock one Inventory at a time, so a later line can block after an earlier one has written. Everything rolls back when the error leaves the outermost transaction (proven on all three engines). On MySQL and MariaDB, a lock-wait timeout in a nested call can leave partial writes in the outer transaction if the caller catches the exception and commits; the checker does not see the result. See `docs/inventory/INVENTORY-CONTROL.md` §24.7.
+
 ### Reserve idempotency race
 
 `unique(order_item_id)` is the identity. If two identical `reserve()` calls race, the loser's `INSERT` fails on that unique index (only that constraint is recognised — an FK/CHECK violation propagates), its transaction rolls back completely (undoing any counter change), and it retries from a clean transaction — bounded, and in practice the first retry observes the winner's rows. Inside a caller-owned REPEATABLE READ transaction the retry may still fail with the duplicate error rather than see the winner — it fails closed, never double-holds.
 
 ### Timeout / unknown outcome
 
-There is no catch-and-compensate anywhere. An exception, deadlock, lock-wait timeout or crash means the transaction rolled back (or never committed) and stored state is the truth; an unknown outcome is resolved by re-reading it or repeating the idempotent call. Nothing ever increases availability because an exception occurred. Laravel's `DB::transaction` is used with its default single attempt: a MySQL deadlock (1213) / lock timeout (1205) or a PostgreSQL serialization failure surfaces as an exception to the caller; it is **not** retried automatically. The one exception is MariaDB's snapshot conflict on a locking read (SQLSTATE `HY000`, driver code `1020`), which is narrowly classified and retried from a clean transaction a bounded number of times — see `docs/architecture/DATABASE-SUPPORT.md` §6. The two FK-lock deadlocks the real-engine tests found are fixed (§11) and none occurs in the exercised scenarios, but that is evidence, not a proof of deadlock freedom: any residual deadlock/lock-wait error would surface to the caller with no partial effect.
+There is no catch-and-compensate anywhere. An exception, deadlock, lock-wait timeout or crash that leaves the outermost transaction means it rolled back (or never committed) and stored state is the truth; an unknown outcome is resolved by re-reading it or repeating the idempotent call. Nothing ever increases availability because an exception occurred. Laravel's `DB::transaction` is used with its default single attempt: a MySQL deadlock (1213) / lock timeout (1205) or a PostgreSQL serialization failure surfaces as an exception to the caller; it is **not** retried automatically. The one exception is MariaDB's snapshot conflict on a locking read (SQLSTATE `HY000`, driver code `1020`), which is narrowly classified and retried from a clean transaction a bounded number of times — see `docs/architecture/DATABASE-SUPPORT.md` §6. The two FK-lock deadlocks the real-engine tests found are fixed (§11) and none occurs in the exercised scenarios, but that is evidence, not a proof of deadlock freedom: any residual deadlock/lock-wait error would surface to the caller, with no partial effect unless a composing caller swallows it (`INVENTORY-CONTROL.md` §24.7).
 
 ### No provider call under a lock
 
@@ -198,6 +200,8 @@ DB::transaction(function () use (...) {
 });
 ```
 
+**This composition is conditional.** A caller's transaction must let concurrency errors escape and roll back: swallowing one and committing can persist part of the Order on MySQL and MariaDB, and that rule is documentation, not a technical guarantee. No production caller may be wired until a verifiable strategy exists (`docs/inventory/INVENTORY-CONTROL.md` §24.7, STOCK-23).
+
 `InventoryReservationServiceTest` ("composes with Order creation atomically") proves both directions: short stock leaves neither Order nor reservation; success leaves both. No orchestration service was added because no checkout exists to need one (`OrderCreationService` still has no production caller — `docs/orders/ORDER-ITEMS.md` §14.9).
 
 ## 9. Product changes after reservation (INVENTORY-15)
@@ -206,7 +210,7 @@ Rename, reprice, re-currency, deactivate and soft-delete change nothing about a 
 
 ## 10. Stock creation and adjustment
 
-**There is no production path that creates or changes physical stock**, and no `setStock`. Tests seed stock with a raw insert (`tests/Helpers.php::inventorySeed`). Production creation/adjustment (receiving, write-offs, "may an operator drop stock below what is reserved?") needs product decisions and an audit ledger; it is future work (§18). Consequently the service can never *increase* `on_hand`; `release` only lowers `reserved`. That future capability is now designed, **not implemented**, in `docs/inventory/INVENTORY-CONTROL.md`: Inventory creation at 0/0, receipts, write-offs, corrections, physical counts and legacy adoption, each with append-only evidence.
+This service creates and increases no stock, and there is no `setStock`: `release` only lowers `reserved`. Stock creation and control belong to `docs/inventory/INVENTORY-CONTROL.md`: Inventory creation at 0/0, receipts, write-offs, corrections, physical counts and legacy adoption, each with append-only evidence, **implemented with no production caller**. `tests/Helpers.php::inventorySeed` still seeds with a raw insert, which produces an unbaselined legacy row, a legitimate state.
 
 ## 11. Concurrency guarantee: what is proven, on which engine
 
@@ -328,22 +332,24 @@ All FKs RESTRICT (`InventoryReservationServiceTest` "Q" reads the actual `PRAGMA
 
 ## 16. Drift detection (INVENTORY-20)
 
-`InventoryIntegrityChecker::audit()` — read-only, chunked, no lock, **never repairs**. Findings: `negative_on_hand`, `negative_reserved`, `reserved_exceeds_on_hand`, `counter_disagrees_with_reservations` (covers a raw counter edit, a raw reservation delete, a terminal reservation still counted, a live one not counted), `unknown_status`, `order_item_missing`, `quantity_mismatch`, `inventory_product_mismatch`. It **cannot** verify `on_hand_quantity` against history: there is no stock ledger, so physical stock is taken as authoritative. (The proposed evidence model and checker extension are in `docs/inventory/INVENTORY-CONTROL.md` §15; design only.) Nothing calls it automatically and no command was added. Duplicate logical reservations are prevented by the unique index, so they are not a finding.
+`InventoryIntegrityChecker::audit()` — read-only, chunked, no lock, **never repairs**. Findings: `negative_on_hand`, `negative_reserved`, `reserved_exceeds_on_hand`, `counter_disagrees_with_reservations` (covers a raw counter edit, a raw reservation delete, a terminal reservation still counted, a live one not counted), `unknown_status`, `order_item_missing`, `quantity_mismatch`, `inventory_product_mismatch`. For an Inventory with a baseline it now also verifies `on_hand_quantity` against its movements, and every piece of evidence against what it claims to evidence (`docs/inventory/INVENTORY-CONTROL.md` §15). For a legacy Inventory without one it cannot: physical stock is taken as authoritative there, and `evidenceReport()` lists it as unbaselined, never as consistent. Nothing calls it automatically and no command was added. Duplicate logical reservations are prevented by the unique index, so they are not a finding.
 
 Fail-closed at operation time: `reserve` refuses a mismatching existing reservation or a tampered Order; `commit`/`release` refuse a reservation whose quantity/Inventory disagrees with its OrderItem and any transition the counters cannot absorb. **Not preventable:** a raw write that *lowers* `reserved_quantity` makes more stock look available to `reserve` — it can only be detected afterwards.
 
 ## 17. Architecture enforcement
 
-`tests/Architecture/InventoryBoundaryTest.php` — comments stripped, exact path allowlists, non-vacuous counts (>100 production files; the domain's exact 8-file list), and a synthetic positive **and** negative self-test for every detector. Scanned roots: `app`, `routes`, `bootstrap`, `config`, `database/seeders` (+ the two inventory migrations by name).
+`tests/Architecture/InventoryBoundaryTest.php` — comments stripped, exact path allowlists, non-vacuous counts (>100 production files; the domain's exact file list), and a synthetic positive **and** negative self-test for every detector. Scanned roots: `app`, `routes`, `bootstrap`, `config`, `database/seeders` (+ the inventory migrations by name).
 
 | Rule | Allowlist |
 |---|---|
-| only the service touches `inventories`/`inventory_reservations` via builder/raw SQL | `InventoryReservationService.php` |
-| no Eloquent write (static, `new`, chain, relation) of either model | none |
+| each inventory table is touched via builder/raw SQL only by its canonical owner | `inventory_reservations`: `InventoryReservationService.php`; `inventories`: that service, `InventoryMovementWriter.php` and `InventoryControlService.php` |
+| no Eloquent write (static, `new`, chain, relation) of any inventory model | none |
 | stock columns/tables appear nowhere outside `app/Domain/Inventory` | none |
 | **no production caller of the inventory domain** (controllers, jobs, listeners, provider adapters, Payment/Wallet/Order code) | **empty** — a tripwire: wiring is a decision |
+| only `InventoryMovementWriter` changes `on_hand_quantity` or inserts a movement; only the canonical services call it (`INVENTORY-CONTROL.md` STOCK-01) | that writer |
+| physical counting has no caller at all, inside or outside the domain (`INVENTORY-CONTROL.md` STOCK-22) | **empty** |
 | the domain has no Payment/Wallet/provider/HTTP/Order-lifecycle dependency and reads no price/currency/amount | — |
-| no excluded concept (variant, sku, warehouse, supplier, expiry, cancellation, fulfilment, adjust, setStock, …) | — |
+| no excluded concept (variant, sku, warehouse, supplier, expiry, cancellation, fulfilment, adjust, setStock, restock, opening_balance, …) | — |
 | no delete/truncate/raw DDL/bare increment/SoftDeletes in the domain | — |
 | every inventory FK `restrictOnDelete()`; no cascade/`nullOnDelete`/softDeletes | — |
 | the service keeps its load-bearing statements (conditional predicate, CAS on `status='reserved'`, `lockForUpdate`, transactions, ordering; single status write behind an enum target) | — |
@@ -358,7 +364,7 @@ Fail-closed at operation time: `reserve` refuses a mismatching existing reservat
 | 02 | stock=1, two concurrent reserve(1) cannot both succeed | **ENFORCED — proven on MySQL, MariaDB and PostgreSQL at their default isolation levels (`DATABASE-SUPPORT.md` §6; originally MySQL 8.0.30)** | single atomic conditional UPDATE, Inventory row locked first | CHECK backstop (demonstrated by probe) | SQL-shape/statement pins | "C" (SQLite algorithm tests); `tests/Concurrency` stock=1 scenarios (2 independent connections, verified lock wait; 4-way barrier ×10) | non-default isolation levels not executed (§11) |
 | 03 | ≤ 1 live reservation per OrderItem | **ENFORCED** | unique-claim INSERT + idempotent replay | `unique(order_item_id)` | — | "D", `InventorySchemaTest` | — |
 | 04 | Reservation creation atomic and idempotent | **ENFORCED** | one transaction; replay returns existing; lost-race rollback + bounded retry | unique index | — | "D" ×3, "composes … atomically" | retry inside a caller-owned REPEATABLE READ transaction may fail closed instead of converging (the top-level retry converges — proven on MySQL, MariaDB and PostgreSQL) |
-| 05 | Multi-line reservation all-or-nothing | **ENFORCED** | one transaction; any failure throws | — | transaction pin | "E" ×3, "S", ordering test | — |
+| 05 | Multi-line reservation all-or-nothing | **ENFORCED once the error leaves the outermost transaction**; a composing caller that swallows it is outside this (`INVENTORY-CONTROL.md` §24.7) | one transaction; any failure throws | — | transaction pin | "E" ×3, "S", ordering test | — |
 | 06 | Duplicate release ≤ 1 stock effect | **ENFORCED** | CAS `status='reserved'`; counters only for the winner | — | CAS pin | "F" ×3 | no DB terminal-state protection against raw SQL |
 | 07 | Duplicate commit ≤ 1 stock effect | **ENFORCED** | same | — | same | "G" ×2 | same |
 | 08 | Committed cannot be released | **ENFORCED** | CAS + illegal-transition refusal | evidence CHECK | enum-target pin | "H", state-machine test | raw SQL can flip status |
@@ -373,7 +379,7 @@ Fail-closed at operation time: `reserve` refuses a mismatching existing reservat
 | 17 | Legacy Orders get no fabricated reservation | **ENFORCED** | `noLines`/`noReservations` | tables start empty | — | "P", `InventorySchemaTest` | — |
 | 18 | History not cascade-deleted | **PARTIALLY** | model delete guards; no delete code | all FKs RESTRICT | migration + shape scans | "Q" | raw `DELETE` of a reservation is not blocked (detected) |
 | 19 | No production bypass of the canonical boundary via known static paths | **PARTIALLY** | model guards (instance writes, `increment`, `saveQuietly`, `withoutEvents`) | — | raw-table, Eloquent-write, hidden-stock, caller scans | "R"; probe 13 | runtime-assembled SQL; direct DB access |
-| 20 | Corruption detected / fails closed where it could oversell or mis-commit | **PARTIALLY** | mismatch + counter-drift refusals; checker | CHECKs | — | tampering tests, `InventoryIntegrityCheckerTest` | a lowered counter is detected only after the fact; no stock ledger |
+| 20 | Corruption detected / fails closed where it could oversell or mis-commit | **PARTIALLY** | mismatch + counter-drift refusals; checker | CHECKs | — | tampering tests, `InventoryIntegrityCheckerTest` | a lowered counter is detected only after the fact; `on_hand` is verifiable only from a baseline (`INVENTORY-CONTROL.md` §15) |
 
 ## 19. Crash / concurrency matrix
 
@@ -439,21 +445,21 @@ Expiry-CAS probe: N/A (no expiry).
 3. **No expiry / release trigger**: reservations live until explicitly committed or released, so a future checkout could hoard stock — bounded only once the §12 decision exists.
 4. **No payment commit integration**; a paid Order can have a `reserved` reservation indefinitely (detectable: paid line-backed Order + `reserved` row).
 5. **Late payment after release** is unresolved (§12).
-6. **`on_hand_quantity` is trusted, not verified.** `InventoryIntegrityChecker` checks the *internal consistency of persisted state* (counters vs reservation rows vs OrderItems). It **cannot** prove that `on_hand_quantity` equals the quantity that physically exists, and there is no stock ledger to reconstruct it from. Stock creation, receipts, adjustments, stocktakes/cycle counts and physical reconciliation belong to a future *inventory-control* capability, deliberately **not** part of inventory reservations, and nothing for them was created here (no tables, no code). Its design contract is `docs/inventory/INVENTORY-CONTROL.md` (PROPOSED, not implemented).
+6. **`on_hand_quantity` is authoritative, not physically verified.** `InventoryIntegrityChecker` checks the *internal consistency of persisted state*. It **cannot** prove that `on_hand_quantity` equals the quantity that physically exists; only a physical count observes that, at its moment. Stock creation, receipts, write-offs, counts and reconciliation are the separate inventory-control capability, `docs/inventory/INVENTORY-CONTROL.md`, deliberately **not** part of inventory reservations and not yet activated.
 7. Raw SQL can flip a terminal status, delete a reservation, or lower `reserved_quantity`; detected by the checker, which nothing runs automatically.
-8. Deadlocks/lock timeouts/serialization failures surface as exceptions and are not auto-retried.
+8. Deadlocks/lock timeouts/serialization failures surface as exceptions and are not auto-retried. Nested in a caller's transaction, MySQL and MariaDB lock-wait timeouts arrive with no savepoint rollback: `INVENTORY-CONTROL.md` §24.7.
 9. The unique-race retry may fail closed inside a caller-owned REPEATABLE READ transaction.
 10. Static scans have the blind spots in §17.
-11. **Operational completeness is deliberately absent** (§0): correctness of the reservation domain is not the same as a working inventory system. Nothing creates stock, nothing calls the service, nothing expires or cancels a hold, nothing commits on payment.
+11. **Operational completeness is deliberately absent** (§0): correctness of the reservation domain is not the same as a working inventory system. Nothing calls the service, nothing expires or cancels a hold, nothing commits on payment.
 12. **Pre-existing, out of scope, tracked centrally:** migration `2026_09_17_090000_create_payment_reconciliation_findings_table` still contains an identifier over MySQL/MariaDB's 64-character limit (and, separately, PostgreSQL's stricter 63-character limit), and always will — the historical migration is immutable. Fresh install is resolved per engine without editing it (schema baselines for MySQL/MariaDB, a direct replay on PostgreSQL) — see `docs/architecture/DATABASE-SUPPORT.md` §3/§11 — and `tests/Architecture/DatabaseMigrationPortabilityTest.php` keeps the exact known set as a regression guard against any new over-limit identifier. `config/database.php` still references `PDO::MYSQL_ATTR_SSL_CA`, deprecated on PHP 8.5 — left untouched there as a separate, non-blocking PHP/MySQL compatibility warning (a correct fix needs PHP-version feature-detection, since this repository supports PHP 8.2+ and the replacement constant needs 8.4+).
 
 ## 22. Future decisions
 
 * what a paid Order with no stock means (§12) — then expiry duration, config (strict integer parsing per `ConfigInteger`), worker, and the release/commit wiring;
 * the checkout contract (who reserves, when, with which composition);
-* how stock is created/adjusted, with a ledger, and whether it may drop below reserved — designed, not implemented, in `docs/inventory/INVENTORY-CONTROL.md` (a count below reserved changes nothing and is kept as a discrepancy; counting is not to be activated until the selling policy for an open discrepancy is decided; write-offs consume only available stock). None of that design changes the reserve guard;
+* the selling policy while a physical discrepancy is open: stock control is implemented in `docs/inventory/INVENTORY-CONTROL.md` (a count below reserved changes nothing and is kept as a discrepancy; write-offs consume only available stock), but counting is not activated until this is decided. If the decision is to block `reserve`, that is a deliberate change of this contract with new real-engine proof: nothing done so far touches the reserve guard;
 * cancellation must use `release()`, never a new stock path;
 
 ## 23. Non-goals confirmed absent
 
-ProductVariant, SKU, warehouses, locations, suppliers, procurement, purchase orders, stock receipts, serials, lots, backorders, negative stock, safety stock, preorder, low-stock alerts, inventory UI, cancellation, fulfilment, shipping, tax, discounts, partial refunds, automatic refund, Payment/Wallet redesign.
+ProductVariant, SKU, warehouses, locations, suppliers, procurement, purchase orders, serials, lots, backorders, negative stock, safety stock, preorder, low-stock alerts, inventory UI, cancellation, fulfilment, shipping, tax, discounts, partial refunds, automatic refund, Payment/Wallet redesign.
